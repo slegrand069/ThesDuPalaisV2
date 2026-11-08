@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -36,6 +38,14 @@ class LocalPreferencesRepository(context: Context) : UserPreferencesStore {
         )
     }
 
+    val installationInitialized: Flow<Boolean> = dataStore.data.map { it[INSTALLATION_INITIALIZED] ?: false }
+
+    suspend fun isInstallationInitialized(): Boolean = installationInitialized.first()
+
+    suspend fun markInstallationInitialized() {
+        dataStore.edit { it[INSTALLATION_INITIALIZED] = true }
+    }
+
     suspend fun setGramsPerCupMilli(value: Long) {
         require(value > 0) { "Le grammage par tasse doit être positif." }
         dataStore.edit { it[GRAMS_PER_CUP_MILLI] = value }
@@ -58,5 +68,6 @@ class LocalPreferencesRepository(context: Context) : UserPreferencesStore {
     private companion object {
         val GRAMS_PER_CUP_MILLI = longPreferencesKey("grams_per_cup_milli")
         val LOW_STOCK_THRESHOLD_MILLI = longPreferencesKey("low_stock_threshold_milli")
+        val INSTALLATION_INITIALIZED = booleanPreferencesKey("installation_initialized")
     }
 }

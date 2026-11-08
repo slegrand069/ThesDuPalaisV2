@@ -197,6 +197,19 @@ class CollectionImporterTest {
     }
 
     @Test
+    fun importingIntoAnExistingCollectionPreservesItsData() = runBlocking {
+        importer.importJson(fixture())
+        val differentDataset = fixture().replace(DATASET_ID, "90000000-0000-4000-8000-000000000099")
+
+        val error = expectImportError(differentDataset)
+
+        assertEquals(CollectionImportException.Code.COLLECTION_NOT_EMPTY, error.code)
+        assertEquals(1, database.teaDao().count())
+        assertEquals("Thé de test fictif", database.teaDao().findById(FIXTURE_TEA_ID)?.name)
+        assertEquals(1, database.tastingDao().count())
+    }
+
+    @Test
     fun databaseFailureRollsBackReferencesTeasTastingsAndDatasetRecord() = runBlocking {
         database.openHelper.writableDatabase.execSQL(
             """CREATE TRIGGER fail_fixture_tasting BEFORE INSERT ON tastings

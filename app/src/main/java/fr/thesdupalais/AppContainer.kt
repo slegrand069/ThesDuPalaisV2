@@ -9,8 +9,10 @@ import fr.thesdupalais.data.importer.CollectionImporter
 import fr.thesdupalais.data.database.RoomReferenceRepository
 import fr.thesdupalais.data.database.StandardReferenceSeeder
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
+import fr.thesdupalais.data.importer.CollectionImportResult
+import fr.thesdupalais.FirstRunOperations
 
-class AppContainer(context: Context) {
+class AppContainer(context: Context) : FirstRunOperations {
     val database: AppDatabase = Room.databaseBuilder(
         context.applicationContext,
         AppDatabase::class.java,
@@ -21,7 +23,13 @@ class AppContainer(context: Context) {
     val referenceRepository = RoomReferenceRepository(database.referenceDao())
     val collectionImporter = CollectionImporter(database, preferences)
 
-    suspend fun initialize() {
+    override suspend fun initialize() {
         StandardReferenceSeeder(database).seed()
     }
+
+    override suspend fun isInstallationInitialized(): Boolean = preferences.isInstallationInitialized()
+
+    override suspend fun markInstallationInitialized() = preferences.markInstallationInitialized()
+
+    override suspend fun importCollection(json: String): CollectionImportResult = collectionImporter.importJson(json)
 }
