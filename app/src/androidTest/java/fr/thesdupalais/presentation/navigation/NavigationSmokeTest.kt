@@ -17,6 +17,9 @@ class NavigationSmokeTest {
     fun bottomNavigationOpensTheKnowledgeAndSettingsDestinations() {
         if (composeRule.onAllNodesWithTag("first-run-empty").fetchSemanticsNodes().isNotEmpty()) {
             composeRule.onNodeWithTag("first-run-empty").performClick()
+            composeRule.waitUntil(5_000) {
+                composeRule.onAllNodesWithTag("first-run-open-catalogue").fetchSemanticsNodes().isNotEmpty()
+            }
             composeRule.onNodeWithTag("first-run-open-catalogue").performClick()
         }
         composeRule.onNodeWithTag("bottom-tab-savoirs").performClick()

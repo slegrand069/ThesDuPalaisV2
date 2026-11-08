@@ -9,10 +9,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,8 +21,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -34,11 +40,14 @@ import androidx.navigation.compose.rememberNavController
 import fr.thesdupalais.AppContainer
 import fr.thesdupalais.presentation.settings.SettingsViewModel
 import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
+import fr.thesdupalais.presentation.catalogue.CatalogueScreen
+import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
+import fr.thesdupalais.presentation.catalogue.CatalogueViewModelFactory
 
-private enum class MainDestination(val route: String, val label: String, val glyph: String) {
-    CATALOGUE("catalogue", "Catalogue", "▦"),
-    KNOWLEDGE("savoirs", "Savoirs", "▤"),
-    SETTINGS("parametres", "Paramètres", "⚙"),
+private enum class MainDestination(val route: String, val label: String, val icon: String) {
+    CATALOGUE("catalogue", "Catalogue", "catalogue"),
+    KNOWLEDGE("savoirs", "Savoirs", "knowledge"),
+    SETTINGS("parametres", "Paramètres", "settings"),
 }
 
 @Composable
@@ -50,26 +59,38 @@ fun AppNavigation(container: AppContainer) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                MainDestination.entries.forEach { destination ->
-                    val selected = currentDestination?.hierarchy?.any {
-                        it.route == destination.route
-                    } == true
-                    NavigationBarItem(
-                        modifier = Modifier.testTag("bottom-tab-${destination.route}"),
-                        selected = selected,
-                        onClick = {
-                            navController.navigate(destination.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Row(modifier = Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
+                    MainDestination.entries.forEach { destination ->
+                        val selected = currentDestination?.hierarchy?.any { it.route == destination.route } == true
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxSize()
+                                .clickable {
+                                    navController.navigate(destination.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
                                 }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = { Text(destination.glyph, style = MaterialTheme.typography.titleMedium) },
-                        label = { Text(destination.label) },
-                    )
+                                .testTag("bottom-tab-${destination.route}"),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            BottomNavigationIcon(destination.icon, selected)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                destination.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -79,7 +100,12 @@ fun AppNavigation(container: AppContainer) {
             startDestination = MainDestination.CATALOGUE.route,
             modifier = Modifier.padding(padding),
         ) {
-            composable(MainDestination.CATALOGUE.route) { CatalogueScreen() }
+            composable(MainDestination.CATALOGUE.route) {
+                val catalogueViewModel: CatalogueViewModel = viewModel(
+                    factory = CatalogueViewModelFactory(container.database.teaDao()),
+                )
+                CatalogueScreen(catalogueViewModel)
+            }
             composable(MainDestination.KNOWLEDGE.route) { KnowledgeScreen() }
             composable(MainDestination.SETTINGS.route) {
                 val settingsViewModel: SettingsViewModel = viewModel(
@@ -92,22 +118,43 @@ fun AppNavigation(container: AppContainer) {
 }
 
 @Composable
-private fun CatalogueScreen() {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 20.dp),
-    ) {
-        Text(
-            text = "ThésDuPalais",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
-        )
-        Text("Ma collection de thés", style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(36.dp))
-        EmptyState(
-            title = "Votre catalogue se prépare",
-            message = "Vos thés apparaîtront ici.",
-        )
+private fun BottomNavigationIcon(kind: String, selected: Boolean) {
+    val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(Modifier.size(20.dp).testTag("bottom-icon-$kind")) {
+        val stroke = 1.5.dp.toPx()
+        when (kind) {
+            "catalogue" -> {
+                val gap = size.width * .12f
+                val cell = (size.width - gap * 2) / 3
+                repeat(3) { row -> repeat(3) { column ->
+                    drawRect(color, Offset(column * (cell + gap), row * (cell + gap)), Size(cell, cell), style = Stroke(stroke))
+                } }
+            }
+            "knowledge" -> {
+                drawRect(color, Offset(size.width * .18f, size.height * .12f), Size(size.width * .64f, size.height * .76f), style = Stroke(stroke))
+                repeat(3) { row ->
+                    val y = size.height * (.34f + row * .19f)
+                    drawLine(color, Offset(size.width * .3f, y), Offset(size.width * .7f, y), stroke, cap = StrokeCap.Round)
+                }
+            }
+            else -> {
+                val center = Offset(size.width / 2, size.height / 2)
+                drawCircle(color, radius = size.width * .3f, center = center, style = Stroke(stroke))
+                drawCircle(color, radius = size.width * .09f, center = center, style = Stroke(stroke))
+                repeat(8) { index ->
+                    val angle = Math.toRadians(index * 45.0)
+                    val inner = size.width * .36f
+                    val outer = size.width * .47f
+                    drawLine(
+                        color,
+                        Offset(center.x + kotlin.math.cos(angle).toFloat() * inner, center.y + kotlin.math.sin(angle).toFloat() * inner),
+                        Offset(center.x + kotlin.math.cos(angle).toFloat() * outer, center.y + kotlin.math.sin(angle).toFloat() * outer),
+                        stroke,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -162,7 +209,7 @@ private fun ScreenTitle(title: String, subtitle: String) {
 }
 
 @Composable
-private fun EmptyState(title: String, message: String) {
+internal fun EmptyState(title: String, message: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),

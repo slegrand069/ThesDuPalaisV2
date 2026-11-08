@@ -1,9 +1,13 @@
 package fr.thesdupalais.data.database
 
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Insert
+import androidx.room.Junction
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Relation
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
@@ -18,6 +22,10 @@ interface TeaDao {
 
     @Query("SELECT * FROM teas WHERE archivedAtEpochMillis IS NULL ORDER BY name COLLATE NOCASE")
     fun observeActive(): Flow<List<TeaEntity>>
+
+    @Transaction
+    @Query("SELECT * FROM teas WHERE archivedAtEpochMillis IS NULL ORDER BY name COLLATE NOCASE")
+    fun observeActiveCatalog(): Flow<List<TeaWithCatalogData>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(tea: TeaEntity)
@@ -43,6 +51,24 @@ interface TeaDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertBadges(values: List<TeaBadgeEntity>)
 }
+
+data class TeaWithCatalogData(
+    @Embedded val tea: TeaEntity,
+    @Relation(parentColumn = "categoryRefId", entityColumn = "id")
+    val category: ReferenceEntity,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaCountryEntity::class, parentColumn = "teaId", entityColumn = "countryRefId"),
+    )
+    val countries: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaRegionEntity::class, parentColumn = "teaId", entityColumn = "regionRefId"),
+    )
+    val regions: List<ReferenceEntity>,
+)
 
 @Dao
 interface TastingDao {
