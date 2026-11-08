@@ -1,0 +1,102 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "410823b5f920473623411d759b95163a",
+    "entities": [
+      {
+        "tableName": "reference_values",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, `normalizedLabel` TEXT NOT NULL, `semanticKey` TEXT, `parentCountryId` TEXT, `scopeKey` TEXT NOT NULL, `archivedAt` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "normalizedLabel",
+            "columnName": "normalizedLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "semanticKey",
+            "columnName": "semanticKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "parentCountryId",
+            "columnName": "parentCountryId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "archivedAt",
+            "columnName": "archivedAt",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reference_values_kind_normalizedLabel_scopeKey",
+            "unique": true,
+            "columnNames": [
+              "kind",
+              "normalizedLabel",
+              "scopeKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reference_values_kind_normalizedLabel_scopeKey` ON `${TABLE_NAME}` (`kind`, `normalizedLabel`, `scopeKey`)"
+          },
+          {
+            "name": "index_reference_values_kind_semanticKey",
+            "unique": true,
+            "columnNames": [
+              "kind",
+              "semanticKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reference_values_kind_semanticKey` ON `${TABLE_NAME}` (`kind`, `semanticKey`)"
+          },
+          {
+            "name": "index_reference_values_parentCountryId",
+            "unique": false,
+            "columnNames": [
+              "parentCountryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reference_values_parentCountryId` ON `${TABLE_NAME}` (`parentCountryId`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '410823b5f920473623411d759b95163a')"
+    ]
+  }
+}
