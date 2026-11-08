@@ -21,7 +21,11 @@ data class UserPreferences(
     }
 }
 
-class LocalPreferencesRepository(context: Context) {
+interface UserPreferencesStore {
+    suspend fun setPreferences(preferences: UserPreferences)
+}
+
+class LocalPreferencesRepository(context: Context) : UserPreferencesStore {
     private val dataStore = context.applicationContext.settingsDataStore
 
     val preferences: Flow<UserPreferences> = dataStore.data.map { values ->
@@ -40,6 +44,15 @@ class LocalPreferencesRepository(context: Context) {
     suspend fun setLowStockThresholdMilli(value: Long) {
         require(value >= 0) { "Le seuil de stock faible ne peut pas être négatif." }
         dataStore.edit { it[LOW_STOCK_THRESHOLD_MILLI] = value }
+    }
+
+    override suspend fun setPreferences(preferences: UserPreferences) {
+        require(preferences.gramsPerCupMilli > 0) { "Le grammage par tasse doit être positif." }
+        require(preferences.lowStockThresholdMilli >= 0) { "Le seuil de stock faible ne peut pas être négatif." }
+        dataStore.edit {
+            it[GRAMS_PER_CUP_MILLI] = preferences.gramsPerCupMilli
+            it[LOW_STOCK_THRESHOLD_MILLI] = preferences.lowStockThresholdMilli
+        }
     }
 
     private companion object {

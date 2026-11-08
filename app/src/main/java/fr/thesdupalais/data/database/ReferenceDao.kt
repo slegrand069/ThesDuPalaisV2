@@ -8,6 +8,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ReferenceDao {
+    @Query("SELECT * FROM reference_values WHERE id = :id LIMIT 1")
+    suspend fun findById(id: java.util.UUID): ReferenceEntity?
+
     @Query("SELECT * FROM reference_values WHERE kind = :kind ORDER BY label COLLATE NOCASE")
     fun observeByKind(kind: String): Flow<List<ReferenceEntity>>
 

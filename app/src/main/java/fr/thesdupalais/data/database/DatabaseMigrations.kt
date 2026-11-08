@@ -82,3 +82,24 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         ).forEach(db::execSQL)
     }
 }
+
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `imported_datasets` (
+                `datasetId` TEXT NOT NULL,
+                `schemaVersion` INTEGER NOT NULL,
+                `contentSha256` TEXT NOT NULL,
+                `sourceCreatedAtEpochMillis` INTEGER NOT NULL,
+                `importedAtEpochMillis` INTEGER NOT NULL,
+                `referenceCount` INTEGER NOT NULL,
+                `teaCount` INTEGER NOT NULL,
+                `tastingCount` INTEGER NOT NULL,
+                `stockMovementCount` INTEGER NOT NULL,
+                `gramsPerCupMilli` INTEGER NOT NULL,
+                `lowStockThresholdMilli` INTEGER NOT NULL,
+                PRIMARY KEY(`datasetId`)
+            )""",
+        )
+    }
+}

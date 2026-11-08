@@ -4,7 +4,9 @@ import androidx.room.withTransaction
 import fr.thesdupalais.domain.references.StandardReferenceSeeds
 
 class StandardReferenceSeeder(private val database: AppDatabase) {
-    suspend fun seed() = database.withTransaction {
+    suspend fun seed() = database.withTransaction { seedWithinTransaction() }
+
+    suspend fun seedWithinTransaction() {
         val dao = database.referenceDao()
         StandardReferenceSeeds.all.forEach { reference ->
             val semanticKey = requireNotNull(reference.semanticKey)

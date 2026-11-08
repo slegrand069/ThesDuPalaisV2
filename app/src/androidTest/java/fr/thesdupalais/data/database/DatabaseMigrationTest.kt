@@ -128,6 +128,47 @@ class DatabaseMigrationTest {
         migrated.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
     }
 
+    @Test
+    fun migrationV2ToV3AddsTransactionalDatasetLedger() {
+        oldDatabase = factory.create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(TEST_DATABASE)
+                .callback(object : SupportSQLiteOpenHelper.Callback(2) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE version_two_marker (id INTEGER NOT NULL PRIMARY KEY)")
+                    }
+
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                        error("Unexpected upgrade while creating schema v2")
+                })
+                .build(),
+        )
+        oldDatabase!!.writableDatabase
+        oldDatabase!!.close()
+
+        migratedDatabase = factory.create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(TEST_DATABASE)
+                .callback(object : SupportSQLiteOpenHelper.Callback(3) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema v2")
+
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        db.beginTransaction()
+                        try {
+                            MIGRATION_2_3.migrate(db)
+                            db.setTransactionSuccessful()
+                        } finally {
+                            db.endTransaction()
+                        }
+                    }
+                })
+                .build(),
+        )
+        migratedDatabase!!.writableDatabase.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'imported_datasets'",
+        ).use { cursor -> assertTrue(cursor.moveToFirst()) }
+    }
+
     private companion object {
         const val TEST_DATABASE = "migration-test"
     }

@@ -1,0 +1,72 @@
+{
+  "format": "thesdupalais.collection",
+  "schemaVersion": 1,
+  "datasetId": "90000000-0000-4000-8000-000000000001",
+  "createdAt": "2026-01-02T10:30:00.000Z",
+  "references": {
+    "categories": [
+      {"id": "10000000-0000-4000-8000-000000000001", "semanticKey": "GREEN", "label": "Thé vert", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ],
+    "statuses": [
+      {"id": "10000000-0000-4000-8000-000000000002", "semanticKey": "IN_COLLECTION", "label": "Dans ma collection", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ],
+    "containers": [],
+    "countries": [
+      {"id": "10000000-0000-4000-8000-000000000003", "semanticKey": "FICTIVE_FIXTURE_COUNTRY", "label": "Pays fictif de fixture", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ],
+    "regions": [
+      {"id": "10000000-0000-4000-8000-000000000004", "semanticKey": "FICTIVE_FIXTURE_REGION", "label": "Région fictive de fixture", "parentCountryId": "10000000-0000-4000-8000-000000000003", "archivedAt": null, "displayPriority": 0}
+    ],
+    "aromas": [
+      {"id": "10000000-0000-4000-8000-000000000005", "semanticKey": "FICTIVE_FIXTURE_AROMA", "label": "Arôme fictif de fixture", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ],
+    "aromaticProfiles": [
+      {"id": "10000000-0000-4000-8000-000000000006", "semanticKey": "FICTIVE_FIXTURE_PROFILE", "label": "Profil fictif de fixture", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ],
+    "moments": [
+      {"id": "10000000-0000-4000-8000-000000000007", "semanticKey": "MORNING", "label": "Matin", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ],
+    "badges": [
+      {"id": "10000000-0000-4000-8000-000000000008", "semanticKey": "FICTIVE_FIXTURE_BADGE", "label": "Badge fictif de fixture", "parentCountryId": null, "archivedAt": null, "displayPriority": 0}
+    ]
+  },
+  "preferences": {
+    "quantityPerCupMilliGrams": 8000,
+    "lowStockThresholdMilliGrams": 30000
+  },
+  "teas": [
+    {
+      "id": "20000000-0000-4000-8000-000000000001",
+      "legacyId": 9001,
+      "name": "Thé de test fictif",
+      "categoryId": "10000000-0000-4000-8000-000000000001",
+      "description": "Fixture fictive pour tests automatisés uniquement.",
+      "technicalInformation": "Lot et notes de test sans donnée historique.",
+      "personalNotes": null,
+      "olfactoryRating": 7.5,
+      "tasteRating": null,
+      "brewTemperatureCelsius": 80,
+      "infusionDurationSeconds": 150,
+      "statusId": "10000000-0000-4000-8000-000000000002",
+      "containerId": null,
+      "countryIds": [],
+      "regionIds": ["10000000-0000-4000-8000-000000000004"],
+      "aromaIds": ["10000000-0000-4000-8000-000000000005"],
+      "aromaticProfileIds": ["10000000-0000-4000-8000-000000000006"],
+      "momentIds": ["10000000-0000-4000-8000-000000000007"],
+      "badgeIds": ["10000000-0000-4000-8000-000000000008"],
+      "stockMilliGrams": null,
+      "archivedAt": null
+    }
+  ],
+  "tastings": [
+    {
+      "id": "30000000-0000-4000-8000-000000000001",
+      "teaId": "20000000-0000-4000-8000-000000000001",
+      "occurredAt": "2026-01-02T10:35:00.000Z",
+      "recordedAt": "2026-01-02T10:36:00.000Z",
+      "consumedMilliGrams": 8000
+    }
+  ],
+  "stockMovements": []
+}

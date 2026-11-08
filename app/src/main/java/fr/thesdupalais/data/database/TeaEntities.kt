@@ -219,3 +219,18 @@ data class TeaPhotoEntity(
     val relativePath: String,
     val position: Int,
 )
+
+@Entity(tableName = "imported_datasets")
+data class ImportedDatasetEntity(
+    @androidx.room.PrimaryKey val datasetId: UUID,
+    val schemaVersion: Int,
+    val contentSha256: String,
+    val sourceCreatedAtEpochMillis: Long,
+    val importedAtEpochMillis: Long,
+    val referenceCount: Int,
+    val teaCount: Int,
+    val tastingCount: Int,
+    val stockMovementCount: Int,
+    val gramsPerCupMilli: Long,
+    val lowStockThresholdMilli: Long,
+)

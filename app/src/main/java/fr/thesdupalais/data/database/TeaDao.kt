@@ -10,6 +10,9 @@ import java.util.UUID
 
 @Dao
 interface TeaDao {
+    @Query("SELECT COUNT(*) FROM teas")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM teas WHERE id = :id")
     suspend fun findById(id: UUID): TeaEntity?
 
@@ -43,6 +46,9 @@ interface TeaDao {
 
 @Dao
 interface TastingDao {
+    @Query("SELECT COUNT(*) FROM tastings")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM tastings WHERE teaId = :teaId ORDER BY occurredAtEpochMillis")
     fun observeForTea(teaId: UUID): Flow<List<TastingEntity>>
 
@@ -59,6 +65,9 @@ interface TastingDao {
 
 @Dao
 interface StockMovementDao {
+    @Query("SELECT COUNT(*) FROM stock_movements")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM stock_movements WHERE teaId = :teaId ORDER BY occurredAtEpochMillis, recordedAtEpochMillis")
     fun observeForTea(teaId: UUID): Flow<List<StockMovementEntity>>
 
@@ -83,4 +92,16 @@ interface TeaPhotoDao {
 
     @Query("DELETE FROM tea_photos WHERE id = :id")
     suspend fun delete(id: UUID)
+}
+
+@Dao
+interface ImportedDatasetDao {
+    @Query("SELECT * FROM imported_datasets WHERE datasetId = :datasetId LIMIT 1")
+    suspend fun findByDatasetId(datasetId: UUID): ImportedDatasetEntity?
+
+    @Query("SELECT * FROM imported_datasets LIMIT 1")
+    suspend fun findAny(): ImportedDatasetEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(dataset: ImportedDatasetEntity)
 }

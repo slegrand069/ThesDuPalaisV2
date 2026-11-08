@@ -17,8 +17,9 @@ import androidx.room.TypeConverters
         TastingEntity::class,
         StockMovementEntity::class,
         TeaPhotoEntity::class,
+        ImportedDatasetEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)
@@ -28,4 +29,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tastingDao(): TastingDao
     abstract fun stockMovementDao(): StockMovementDao
     abstract fun teaPhotoDao(): TeaPhotoDao
+    abstract fun importedDatasetDao(): ImportedDatasetDao
 }
