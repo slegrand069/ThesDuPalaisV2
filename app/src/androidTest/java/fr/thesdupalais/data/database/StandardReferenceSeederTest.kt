@@ -32,17 +32,20 @@ class StandardReferenceSeederTest {
     }
 
     @Test
-    fun seedingIsRepeatableAndPreservesStandardColorIdentities() = runBlocking {
+    fun seedingIsRepeatableAndPreservesStandardCategoryIdentities() = runBlocking {
         val seeder = StandardReferenceSeeder(database)
         seeder.seed()
         seeder.seed()
 
-        val actual = database.referenceDao().observeByKind("COLOR").first()
-        assertEquals(StandardReferenceSeeds.colors.size, actual.size)
-        StandardReferenceSeeds.colors.forEach { expected ->
+        val actual = database.referenceDao().observeByKind("CATEGORY").first()
+        assertEquals(StandardReferenceSeeds.categories.size, actual.size)
+        StandardReferenceSeeds.categories.forEach { expected ->
             val saved = actual.singleOrNull { it.semanticKey == expected.semanticKey }
-            assertNotNull("Missing standard color ${expected.semanticKey}", saved)
+            assertNotNull("Missing standard category ${expected.semanticKey}", saved)
             assertEquals(expected.id, saved?.id)
         }
+        assertEquals(6, database.referenceDao().observeByKind("STATUS").first().size)
+        assertEquals(5, database.referenceDao().observeByKind("CONTAINER").first().size)
+        assertEquals(7, database.referenceDao().observeByKind("MOMENT").first().size)
     }
 }

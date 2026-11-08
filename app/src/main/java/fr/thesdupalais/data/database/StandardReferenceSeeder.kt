@@ -6,10 +6,22 @@ import fr.thesdupalais.domain.references.StandardReferenceSeeds
 class StandardReferenceSeeder(private val database: AppDatabase) {
     suspend fun seed() = database.withTransaction {
         val dao = database.referenceDao()
-        StandardReferenceSeeds.colors.forEach { color ->
-            val exists = dao.findBySemanticKey(color.kind.name, requireNotNull(color.semanticKey))
-            if (exists == null) {
-                dao.insertIfAbsent(ReferenceEntity.fromDomain(color))
+        StandardReferenceSeeds.all.forEach { reference ->
+            val semanticKey = requireNotNull(reference.semanticKey)
+            val bySemanticKey = dao.findBySemanticKey(reference.kind.name, semanticKey)
+            if (bySemanticKey != null) return@forEach
+
+            val byLabel = dao.findByNormalizedLabel(
+                kind = reference.kind.name,
+                normalizedLabel = reference.normalizedLabel,
+                scopeKey = reference.parentCountryId?.toString().orEmpty(),
+            )
+            if (byLabel != null) {
+                if (byLabel.semanticKey == null) {
+                    dao.assignSemanticKeyIfMissing(byLabel.id, semanticKey)
+                }
+            } else {
+                dao.insertIfAbsent(ReferenceEntity.fromDomain(reference))
             }
         }
     }

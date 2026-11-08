@@ -1,11 +1,12 @@
 package fr.thesdupalais.domain.model
 
 enum class ReferenceKind {
-    COLOR,
+    CATEGORY,
     STATUS,
     COUNTRY,
     REGION,
     AROMA,
+    AROMATIC_PROFILE,
     MOMENT,
     BADGE,
     CONTAINER,

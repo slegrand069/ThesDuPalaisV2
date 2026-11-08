@@ -7,18 +7,21 @@ import org.junit.Test
 
 class StandardReferenceSeedsTest {
     @Test
-    fun `includes the approved standard colors and stable semantic identities`() {
-        val colors = StandardReferenceSeeds.colors
-        val byKey = colors.associateBy { it.semanticKey }
+    fun `includes the approved standard categories and stable semantic identities`() {
+        val categories = StandardReferenceSeeds.categories
+        val byKey = categories.associateBy { it.semanticKey }
 
         assertEquals(
-            setOf("GREEN", "BLACK", "WHITE", "YELLOW", "OOLONG", "PU_ERH"),
+            setOf("GREEN", "BLACK", "WHITE", "YELLOW", "OOLONG", "PU_ERH", "INFUSION", "MATE", "OTHER"),
             byKey.keys,
         )
-        assertEquals("Jaune", byKey.getValue("YELLOW").label)
-        assertEquals("Pu'Erh", byKey.getValue("PU_ERH").label)
-        assertEquals(byKey.getValue("PU_ERH").id, colors.single { it.semanticKey == "PU_ERH" }.id)
+        assertEquals("Thé jaune", byKey.getValue("YELLOW").label)
+        assertEquals("Pu’Erh", byKey.getValue("PU_ERH").label)
+        assertEquals(byKey.getValue("PU_ERH").id, categories.single { it.semanticKey == "PU_ERH" }.id)
         assertNotEquals(byKey.getValue("PU_ERH").id, byKey.getValue("BLACK").id)
-        assertTrue(colors.all { it.id.toString() == it.id.toString().lowercase() })
+        assertTrue(categories.all { it.id.toString() == it.id.toString().lowercase() })
+        assertEquals(6, StandardReferenceSeeds.statuses.size)
+        assertEquals(5, StandardReferenceSeeds.containers.size)
+        assertEquals(7, StandardReferenceSeeds.moments.size)
     }
 }

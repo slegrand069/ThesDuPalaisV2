@@ -10,4 +10,5 @@ data class ReferenceValue(
     val semanticKey: String? = null,
     val parentCountryId: UUID? = null,
     val archivedAt: Long? = null,
+    val displayPriority: Int = 0,
 )
