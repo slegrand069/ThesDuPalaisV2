@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -71,7 +72,12 @@ fun AppNavigation(container: AppContainer) {
         bottomBar = {
             if (currentDestination?.route != TEA_DETAIL_ROUTE) {
             Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                // This custom Figma bar has no built-in window insets unlike Material NavigationBar.
+                // Include the system navigation area in its measured height so Scaffold places it above it.
+                modifier = Modifier.fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .navigationBarsPadding()
+                    .testTag("main-bottom-bar"),
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
