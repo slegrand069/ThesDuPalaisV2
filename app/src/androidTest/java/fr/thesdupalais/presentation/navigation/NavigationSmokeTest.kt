@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performScrollTo
 import fr.thesdupalais.MainActivity
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -25,6 +26,18 @@ class NavigationSmokeTest {
 
         composeRule.onNodeWithTag("bottom-tab-parametres").performClick()
         composeRule.onNodeWithTag("screen-title-paramètres").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsOpensCategoryAndAromaticProfileReferenceLists() {
+        openCatalogueIfFirstRun()
+        composeRule.onNodeWithTag("bottom-tab-parametres").performClick()
+        composeRule.onNodeWithTag("settings-reference-CATEGORY").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("reference-list-title-CATEGORY").assertIsDisplayed()
+        composeRule.onNodeWithTag("reference-back").performClick()
+
+        composeRule.onNodeWithTag("settings-reference-AROMATIC_PROFILE").performScrollTo().performClick()
+        composeRule.onNodeWithTag("reference-list-title-AROMATIC_PROFILE").assertIsDisplayed()
     }
 
     @Test

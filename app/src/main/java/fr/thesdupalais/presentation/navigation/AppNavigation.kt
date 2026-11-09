@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +43,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import fr.thesdupalais.AppContainer
+import fr.thesdupalais.domain.model.ReferenceKind
+import fr.thesdupalais.presentation.references.ReferenceFamily
+import fr.thesdupalais.presentation.references.ReferenceListScreen
+import fr.thesdupalais.presentation.references.ReferenceListViewModel
+import fr.thesdupalais.presentation.references.ReferenceListViewModelFactory
+import fr.thesdupalais.presentation.references.referenceFamilies
 import fr.thesdupalais.presentation.settings.SettingsViewModel
 import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
@@ -54,6 +62,7 @@ import fr.thesdupalais.presentation.detail.TeaDetailViewModelFactory
 import java.util.UUID
 
 private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
+private const val REFERENCE_LIST_ROUTE = "references/{kind}"
 
 private enum class MainDestination(val route: String, val label: String, val icon: String) {
     CATALOGUE("catalogue", "Catalogue", "catalogue"),
@@ -84,7 +93,8 @@ fun AppNavigation(container: AppContainer) {
             ) {
                 Row(modifier = Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
                     MainDestination.entries.forEach { destination ->
-                        val selected = currentDestination?.hierarchy?.any { it.route == destination.route } == true
+                        val selected = currentDestination?.hierarchy?.any { it.route == destination.route } == true ||
+                            (destination == MainDestination.SETTINGS && currentDestination?.route?.startsWith("references/") == true)
                         Column(
                             modifier = Modifier.weight(1f).fillMaxSize()
                                 .clickable {
@@ -131,7 +141,25 @@ fun AppNavigation(container: AppContainer) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModelFactory(container.preferences),
                 )
-                SettingsScreen(settingsViewModel)
+                SettingsScreen(settingsViewModel) { kind ->
+                    navController.navigate("references/${kind.name}")
+                }
+            }
+            composable(
+                route = REFERENCE_LIST_ROUTE,
+                arguments = listOf(navArgument("kind") { type = NavType.StringType }),
+            ) { referenceEntry ->
+                val kind = referenceEntry.arguments?.getString("kind")
+                    ?.let { value -> runCatching { ReferenceKind.valueOf(value) }.getOrNull() }
+                if (kind == null) {
+                    InvalidReferenceScreen(onBack = { navController.popBackStack() })
+                } else {
+                    val referenceViewModel: ReferenceListViewModel = viewModel(
+                        key = "reference-list-${kind.name}",
+                        factory = ReferenceListViewModelFactory(container.referenceRepository, kind),
+                    )
+                    ReferenceListScreen(referenceViewModel) { navController.popBackStack() }
+                }
             }
             composable(
                 route = TEA_DETAIL_ROUTE,
@@ -217,26 +245,76 @@ private fun KnowledgeScreen() {
 }
 
 @Composable
-private fun SettingsScreen(viewModel: SettingsViewModel) {
+private fun SettingsScreen(viewModel: SettingsViewModel, onOpenReference: (ReferenceKind) -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 20.dp),
+        modifier = Modifier.fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 20.dp),
     ) {
         ScreenTitle("Paramètres", "Personnalisez votre collection de thés")
         Spacer(Modifier.height(24.dp))
+        Text("Référentiels", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        referenceFamilies.chunked(2).forEach { rowFamilies ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                rowFamilies.forEach { family ->
+                    ReferenceFamilyCard(
+                        family = family,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpenReference(family.kind) },
+                    )
+                }
+                if (rowFamilies.size == 1) Spacer(Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Spacer(Modifier.height(14.dp))
         Text("Préférences", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
         PreferenceCard("Grammage estimé par tasse", formatGrams(preferences.gramsPerCupMilli))
         Spacer(Modifier.height(10.dp))
         PreferenceCard("Seuil de stock faible", formatGrams(preferences.lowStockThresholdMilli))
-        Spacer(Modifier.height(24.dp))
-        Text("Référentiels", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "Couleurs, statuts, pays, régions, arômes, moments, badges et contenants",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    }
+}
+
+@Composable
+private fun ReferenceFamilyCard(
+    family: ReferenceFamily,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(54.dp).testTag("settings-reference-${family.kind.name}"),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                family.label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun InvalidReferenceScreen(onBack: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+        Text("Référentiel indisponible", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(12.dp))
+        Text("Cette famille de références n’existe pas.", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(12.dp))
+        Text("Retour", modifier = Modifier.clickable(onClick = onBack), color = MaterialTheme.colorScheme.primary)
     }
 }
 
