@@ -1,6 +1,6 @@
 package fr.thesdupalais.presentation.catalogue
 
-import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertCountEquals
@@ -8,8 +8,10 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import fr.thesdupalais.presentation.theme.ThesDuPalaisTheme
 import java.util.UUID
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -27,8 +29,9 @@ class CatalogueScreenTest {
         composeRule.onNodeWithTag("catalogue-add-disabled").assertIsNotEnabled()
     }
 
-    @Test fun showsFigmaCardContentAndDoesNotAddClickNavigation() {
+    @Test fun clickingTeaCardPassesItsIdToNavigation() {
         val id = UUID.fromString("00000000-0000-4000-8000-000000000001")
+        var selectedTeaId: UUID? = null
         composeRule.setContent {
             ThesDuPalaisTheme {
                 CatalogueContent(
@@ -45,6 +48,7 @@ class CatalogueScreenTest {
                             ),
                         ),
                     ),
+                    onTeaSelected = { selectedTeaId = it },
                 )
             }
         }
@@ -57,7 +61,8 @@ class CatalogueScreenTest {
         composeRule.onNodeWithText("★ 9/10").assertIsDisplayed()
         composeRule.onNodeWithTag("catalogue-placeholder-GREEN").assertIsDisplayed()
         composeRule.onAllNodesWithText("Notes personnelles").assertCountEquals(0)
-        composeRule.onNodeWithTag("catalogue-tea-$id").assertHasNoClickAction()
+        composeRule.onNodeWithTag("catalogue-tea-$id").assertHasClickAction().performClick()
+        assertEquals(id, selectedTeaId)
     }
 
     @Test fun categoryWithoutIllustratedPlaceholderUsesGenericFallback() {

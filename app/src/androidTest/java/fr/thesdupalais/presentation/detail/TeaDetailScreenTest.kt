@@ -1,0 +1,122 @@
+package fr.thesdupalais.presentation.detail
+
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import fr.thesdupalais.presentation.theme.ThesDuPalaisTheme
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.util.UUID
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+
+class TeaDetailScreenTest {
+    @get:Rule val composeRule = createComposeRule()
+
+    @Test fun showsRealDetailFieldsAndHistoricalTastingsWithoutWriteActions() {
+        val occurredAt = ZonedDateTime.of(2026, 11, 1, 14, 30, 0, 0, ZoneId.of("Europe/Paris")).toInstant().toEpochMilli()
+        var backPressed = false
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(
+                        tea = detail(),
+                        tastings = listOf(TeaTasting(UUID.randomUUID(), occurredAt, 1_250L)),
+                    ),
+                    onBack = { backPressed = true },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Thé vert", substring = true).assertIsDisplayed()
+        assertTextExists("Statut : Dans ma collection · Contenant : Boîte")
+        assertTextExists("8,5 / 10")
+        assertTextExists("9 / 10")
+        assertTextExists("Notes personnelles")
+        assertTextExists("Description de test")
+        assertTextExists("Informations techniques de test")
+        assertTextExists("Profils aromatiques")
+        assertTextExists("Végétal")
+        assertTextExists(formatTastingDateTime(occurredAt))
+        assertTextExists("Quantité consommée · 1,25 g")
+        composeRule.onNodeWithTag("tea-detail-edit-disabled").assertIsNotEnabled()
+        composeRule.onAllNodesWithText("STOCK & CONTENANT").assertCountEquals(0)
+        composeRule.onAllNodesWithText("GALERIE PHOTOS").assertCountEquals(0)
+        composeRule.onAllNodesWithText("En déguster un").assertCountEquals(0)
+        composeRule.onAllNodesWithText("En stock").assertCountEquals(0)
+
+        composeRule.onNodeWithTag("tea-detail-back").performClick()
+        assertTrue(backPressed)
+    }
+
+    @Test fun hidesUnsetOptionalSectionsAndShowsEmptyTastingHistory() {
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(
+                        tea = detail().copy(
+                            personalStatus = null,
+                            container = null,
+                            description = null,
+                            technicalInformation = null,
+                            tasteRating = null,
+                            olfactoryRating = null,
+                            brewTemperatureCelsius = null,
+                            infusionDurationSeconds = null,
+                            personalNotes = null,
+                            aromas = emptyList(),
+                            aromaticProfiles = emptyList(),
+                            moments = emptyList(),
+                            badges = emptyList(),
+                        ),
+                        tastings = emptyList(),
+                    ),
+                ) {}
+            }
+        }
+
+        composeRule.onNodeWithText("Aucune dégustation enregistrée.").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("tea-detail-additional-information").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("tea-detail-preparation").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("tea-detail-aromas-moments").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Contenant : Boîte").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Quantité consommée").assertCountEquals(0)
+    }
+
+    @Test fun showsUnavailableForAbsentOrArchivedTeaState() {
+        composeRule.setContent { ThesDuPalaisTheme { TeaDetailContent(TeaDetailUiState.Unavailable) {} } }
+
+        composeRule.onNodeWithText("Ce thé n’est pas disponible dans le catalogue.").assertIsDisplayed()
+        composeRule.onNodeWithTag("tea-detail-edit-disabled").assertIsNotEnabled()
+    }
+
+    private fun detail() = TeaDetail(
+        id = UUID.fromString("00000000-0000-4000-8000-000000000003"),
+        name = "Sencha fictif",
+        category = "Thé vert",
+        origins = listOf("Japon — Shizuoka, Uji"),
+        personalStatus = "Dans ma collection",
+        container = "Boîte",
+        description = "Description de test",
+        technicalInformation = "Informations techniques de test",
+        tasteRating = 8.5,
+        olfactoryRating = 9.0,
+        brewTemperatureCelsius = 75,
+        infusionDurationSeconds = 150,
+        personalNotes = "Note personnelle de test",
+        aromas = listOf("Herbe coupée"),
+        aromaticProfiles = listOf("Végétal"),
+        moments = listOf("Matin"),
+        badges = listOf("Bio"),
+    )
+
+    private fun assertTextExists(text: String) = composeRule.onAllNodesWithText(text).assertCountEquals(1)
+}

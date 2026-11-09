@@ -33,6 +33,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -43,6 +45,14 @@ import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModelFactory
+import fr.thesdupalais.presentation.detail.TeaDetailContent
+import fr.thesdupalais.presentation.detail.TeaDetailScreen
+import fr.thesdupalais.presentation.detail.TeaDetailUiState
+import fr.thesdupalais.presentation.detail.TeaDetailViewModel
+import fr.thesdupalais.presentation.detail.TeaDetailViewModelFactory
+import java.util.UUID
+
+private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
 
 private enum class MainDestination(val route: String, val label: String, val icon: String) {
     CATALOGUE("catalogue", "Catalogue", "catalogue"),
@@ -59,6 +69,7 @@ fun AppNavigation(container: AppContainer) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
+            if (currentDestination?.route != TEA_DETAIL_ROUTE) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 shape = RoundedCornerShape(12.dp),
@@ -93,6 +104,7 @@ fun AppNavigation(container: AppContainer) {
                     }
                 }
             }
+            }
         },
     ) { padding ->
         NavHost(
@@ -104,7 +116,9 @@ fun AppNavigation(container: AppContainer) {
                 val catalogueViewModel: CatalogueViewModel = viewModel(
                     factory = CatalogueViewModelFactory(container.database.teaDao()),
                 )
-                CatalogueScreen(catalogueViewModel)
+                CatalogueScreen(catalogueViewModel) { teaId ->
+                    navController.navigate("tea/$teaId")
+                }
             }
             composable(MainDestination.KNOWLEDGE.route) { KnowledgeScreen() }
             composable(MainDestination.SETTINGS.route) {
@@ -112,6 +126,30 @@ fun AppNavigation(container: AppContainer) {
                     factory = SettingsViewModelFactory(container.preferences),
                 )
                 SettingsScreen(settingsViewModel)
+            }
+            composable(
+                route = TEA_DETAIL_ROUTE,
+                arguments = listOf(navArgument("teaId") { type = NavType.StringType }),
+            ) { detailEntry ->
+                val teaId = detailEntry.arguments?.getString("teaId")?.let { rawId ->
+                    runCatching { UUID.fromString(rawId) }.getOrNull()
+                }
+                val onBack = {
+                    if (!navController.popBackStack()) navController.navigate(MainDestination.CATALOGUE.route)
+                }
+                if (teaId == null) {
+                    TeaDetailContent(TeaDetailUiState.Unavailable, onBack)
+                } else {
+                    val detailViewModel: TeaDetailViewModel = viewModel(
+                        key = "tea-detail-$teaId",
+                        factory = TeaDetailViewModelFactory(
+                            teaId,
+                            container.database.teaDao(),
+                            container.database.tastingDao(),
+                        ),
+                    )
+                    TeaDetailScreen(detailViewModel, onBack)
+                }
             }
         }
     }

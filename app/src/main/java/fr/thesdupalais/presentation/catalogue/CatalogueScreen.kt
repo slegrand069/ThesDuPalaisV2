@@ -40,15 +40,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.UUID
 
 @Composable
-fun CatalogueScreen(viewModel: CatalogueViewModel) {
+fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    CatalogueContent(state)
+    CatalogueContent(state, onTeaSelected)
 }
 
 @Composable
-internal fun CatalogueContent(state: CatalogueUiState) {
+internal fun CatalogueContent(state: CatalogueUiState, onTeaSelected: (UUID) -> Unit = {}) {
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
@@ -74,7 +75,9 @@ internal fun CatalogueContent(state: CatalogueUiState) {
                     modifier = Modifier.fillMaxSize().testTag("catalogue-list"),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(state.teas, key = { it.id.toString() }) { tea -> CatalogueTeaRow(tea) }
+                    items(state.teas, key = { it.id.toString() }) { tea ->
+                        CatalogueTeaRow(tea) { onTeaSelected(tea.id) }
+                    }
                 }
                 DisabledAddButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp))
             }
@@ -168,8 +171,9 @@ private fun CatalogueEmptyState(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CatalogueTeaRow(tea: CatalogueTea) {
+private fun CatalogueTeaRow(tea: CatalogueTea, onClick: () -> Unit) {
     Surface(
+        onClick = onClick,
         modifier = Modifier.fillMaxWidth().testTag("catalogue-tea-${tea.id}"),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,

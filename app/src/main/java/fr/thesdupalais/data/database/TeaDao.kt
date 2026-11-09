@@ -27,6 +27,10 @@ interface TeaDao {
     @Query("SELECT * FROM teas WHERE archivedAtEpochMillis IS NULL ORDER BY name COLLATE NOCASE")
     fun observeActiveCatalog(): Flow<List<TeaWithCatalogData>>
 
+    @Transaction
+    @Query("SELECT * FROM teas WHERE id = :teaId AND archivedAtEpochMillis IS NULL LIMIT 1")
+    fun observeActiveDetail(teaId: UUID): Flow<TeaWithDetailData?>
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(tea: TeaEntity)
 
@@ -70,12 +74,58 @@ data class TeaWithCatalogData(
     val regions: List<ReferenceEntity>,
 )
 
+data class TeaWithDetailData(
+    @Embedded val tea: TeaEntity,
+    @Relation(parentColumn = "categoryRefId", entityColumn = "id")
+    val category: ReferenceEntity,
+    @Relation(parentColumn = "statusRefId", entityColumn = "id")
+    val status: ReferenceEntity?,
+    @Relation(parentColumn = "containerRefId", entityColumn = "id")
+    val container: ReferenceEntity?,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaCountryEntity::class, parentColumn = "teaId", entityColumn = "countryRefId"),
+    )
+    val countries: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaRegionEntity::class, parentColumn = "teaId", entityColumn = "regionRefId"),
+    )
+    val regions: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaAromaEntity::class, parentColumn = "teaId", entityColumn = "aromaRefId"),
+    )
+    val aromas: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaAromaticProfileEntity::class, parentColumn = "teaId", entityColumn = "profileRefId"),
+    )
+    val aromaticProfiles: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaMomentEntity::class, parentColumn = "teaId", entityColumn = "momentRefId"),
+    )
+    val moments: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaBadgeEntity::class, parentColumn = "teaId", entityColumn = "badgeRefId"),
+    )
+    val badges: List<ReferenceEntity>,
+)
+
 @Dao
 interface TastingDao {
     @Query("SELECT COUNT(*) FROM tastings")
     suspend fun count(): Int
 
-    @Query("SELECT * FROM tastings WHERE teaId = :teaId ORDER BY occurredAtEpochMillis")
+    @Query("SELECT * FROM tastings WHERE teaId = :teaId ORDER BY occurredAtEpochMillis DESC, recordedAtEpochMillis DESC, id DESC")
     fun observeForTea(teaId: UUID): Flow<List<TastingEntity>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
