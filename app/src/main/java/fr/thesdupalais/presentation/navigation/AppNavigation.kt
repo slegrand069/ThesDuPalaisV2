@@ -36,6 +36,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
@@ -43,6 +45,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import fr.thesdupalais.AppContainer
+import fr.thesdupalais.data.database.TeaRepository
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.presentation.references.ReferenceFamily
 import fr.thesdupalais.presentation.references.ReferenceListScreen
@@ -63,9 +66,13 @@ import fr.thesdupalais.presentation.detail.TeaDetailScreen
 import fr.thesdupalais.presentation.detail.TeaDetailUiState
 import fr.thesdupalais.presentation.detail.TeaDetailViewModel
 import fr.thesdupalais.presentation.detail.TeaDetailViewModelFactory
+import fr.thesdupalais.presentation.teaform.TeaFormScreen
+import fr.thesdupalais.presentation.teaform.TeaFormViewModel
+import fr.thesdupalais.presentation.teaform.TeaFormViewModelFactory
 import java.util.UUID
 
 private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
+internal const val TEA_CREATE_ROUTE = "tea/create"
 private const val REFERENCE_LIST_ROUTE = "references/{kind}"
 private const val REFERENCE_CREATE_ROUTE = "references/{kind}/create"
 private const val REFERENCE_EDIT_ROUTE = "references/{kind}/edit/{referenceId}"
@@ -85,7 +92,7 @@ fun AppNavigation(container: AppContainer) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (currentDestination?.route != TEA_DETAIL_ROUTE) {
+            if (currentDestination?.route?.startsWith("tea/") != true) {
             Surface(
                 // This custom Figma bar has no built-in window insets unlike Material NavigationBar.
                 // Include the system navigation area in its measured height so Scaffold places it above it.
@@ -138,10 +145,13 @@ fun AppNavigation(container: AppContainer) {
                 val catalogueViewModel: CatalogueViewModel = viewModel(
                     factory = CatalogueViewModelFactory(container.database.teaDao()),
                 )
-                CatalogueScreen(catalogueViewModel) { teaId ->
-                    navController.navigate("tea/$teaId")
-                }
+                CatalogueScreen(
+                    viewModel = catalogueViewModel,
+                    onTeaSelected = { teaId -> navController.navigate("tea/$teaId") },
+                    onAddTea = { navController.navigate(TEA_CREATE_ROUTE) },
+                )
             }
+            teaCreationDestination(navController, container.teaRepository)
             composable(MainDestination.KNOWLEDGE.route) { KnowledgeScreen() }
             composable(MainDestination.SETTINGS.route) {
                 val settingsViewModel: SettingsViewModel = viewModel(
@@ -223,6 +233,26 @@ fun AppNavigation(container: AppContainer) {
                 }
             }
         }
+    }
+}
+
+internal fun NavGraphBuilder.teaCreationDestination(
+    navController: NavHostController,
+    repository: TeaRepository,
+) {
+    composable(TEA_CREATE_ROUTE) {
+        val createViewModel: TeaFormViewModel = viewModel(
+            factory = TeaFormViewModelFactory(repository),
+        )
+        TeaFormScreen(
+            viewModel = createViewModel,
+            onCancel = { navController.popBackStack() },
+            onSaved = { teaId ->
+                navController.navigate("tea/$teaId") {
+                    popUpTo(TEA_CREATE_ROUTE) { inclusive = true }
+                }
+            },
+        )
     }
 }
 

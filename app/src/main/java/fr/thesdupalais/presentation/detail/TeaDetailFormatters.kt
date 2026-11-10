@@ -17,8 +17,12 @@ internal fun formatTastingDateTime(
 internal fun formatConsumedQuantity(milliGrams: Long): String =
     BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',') + " g"
 
-internal fun formatDetailRating(rating: Double): String =
-    BigDecimal.valueOf(rating).stripTrailingZeros().toPlainString().replace('.', ',')
+internal fun formatDetailRating(rating: Double): String {
+    val value = BigDecimal.valueOf(rating)
+    val nearestTenth = value.setScale(1, java.math.RoundingMode.HALF_UP)
+    val normalized = if (value.subtract(nearestTenth).abs() <= BigDecimal("0.000001")) nearestTenth else value
+    return normalized.stripTrailingZeros().toPlainString().replace('.', ',')
+}
 
 internal fun formatInfusionDuration(seconds: Int): String = when {
     seconds < 60 -> "$seconds s"

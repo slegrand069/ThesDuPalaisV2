@@ -46,6 +46,9 @@ interface ReferenceDao {
     @Query("SELECT * FROM reference_values WHERE kind = :kind ORDER BY label COLLATE NOCASE")
     fun observeByKind(kind: String): Flow<List<ReferenceEntity>>
 
+    @Query("SELECT * FROM reference_values WHERE kind = :kind AND archivedAt IS NULL ORDER BY displayPriority, label COLLATE NOCASE")
+    fun observeSelectableByKind(kind: String): Flow<List<ReferenceEntity>>
+
     @Query("""
         SELECT r.*,
             CASE r.kind

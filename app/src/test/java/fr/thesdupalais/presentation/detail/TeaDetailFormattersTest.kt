@@ -17,6 +17,8 @@ class TeaDetailFormattersTest {
         assertEquals("1,25 g", formatConsumedQuantity(1_250L))
         assertEquals("7 g", formatConsumedQuantity(7_000L))
         assertEquals("8,5", formatDetailRating(8.5))
+        assertEquals("8,3", formatDetailRating(8.300000190734863))
+        assertEquals("8,375", formatDetailRating(8.375))
     }
 
     @Test fun formatsInfusionDurationsInMinutesAndSeconds() {

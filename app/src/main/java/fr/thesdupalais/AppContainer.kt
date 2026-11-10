@@ -8,6 +8,7 @@ import fr.thesdupalais.data.database.MIGRATION_2_3
 import fr.thesdupalais.data.importer.CollectionImporter
 import fr.thesdupalais.data.database.RoomReferenceRepository
 import fr.thesdupalais.data.database.StandardReferenceSeeder
+import fr.thesdupalais.data.database.TeaRepository
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
 import fr.thesdupalais.data.importer.CollectionImportResult
 import fr.thesdupalais.FirstRunOperations
@@ -21,6 +22,7 @@ class AppContainer(context: Context) : FirstRunOperations {
 
     val preferences = LocalPreferencesRepository(context)
     val referenceRepository = RoomReferenceRepository(database)
+    val teaRepository = TeaRepository(database)
     val collectionImporter = CollectionImporter(database, preferences)
 
     override suspend fun initialize() {

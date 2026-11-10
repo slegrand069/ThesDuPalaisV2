@@ -43,13 +43,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.UUID
 
 @Composable
-fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit) {
+fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit, onAddTea: () -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    CatalogueContent(state, onTeaSelected)
+    CatalogueContent(state, onTeaSelected, onAddTea)
 }
 
 @Composable
-internal fun CatalogueContent(state: CatalogueUiState, onTeaSelected: (UUID) -> Unit = {}) {
+internal fun CatalogueContent(state: CatalogueUiState, onTeaSelected: (UUID) -> Unit = {}, onAddTea: () -> Unit = {}) {
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
@@ -68,7 +68,7 @@ internal fun CatalogueContent(state: CatalogueUiState, onTeaSelected: (UUID) -> 
             CatalogueUiState.Loading -> CircularProgressIndicator(modifier = Modifier.testTag("catalogue-loading"))
             CatalogueUiState.Empty -> Box(Modifier.weight(1f).fillMaxWidth()) {
                 CatalogueEmptyState(Modifier.align(androidx.compose.ui.Alignment.Center))
-                DisabledAddButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp))
+                AddTeaButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp), onAddTea)
             }
             is CatalogueUiState.Content -> Box(Modifier.weight(1f).fillMaxWidth()) {
                 LazyColumn(
@@ -79,7 +79,7 @@ internal fun CatalogueContent(state: CatalogueUiState, onTeaSelected: (UUID) -> 
                         CatalogueTeaRow(tea) { onTeaSelected(tea.id) }
                     }
                 }
-                DisabledAddButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp))
+                AddTeaButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp), onAddTea)
             }
         }
     }
@@ -138,11 +138,10 @@ private fun FilterGlyph(modifier: Modifier, tint: Color) {
 }
 
 @Composable
-private fun DisabledAddButton(modifier: Modifier = Modifier) {
+private fun AddTeaButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
-        modifier = modifier.size(56.dp).alpha(.48f)
-            .semantics { disabled(); role = Role.Button }
-            .testTag("catalogue-add-disabled"),
+        onClick = onClick,
+        modifier = modifier.size(56.dp).testTag("catalogue-add"),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.primary,
     ) {
