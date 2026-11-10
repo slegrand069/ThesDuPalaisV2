@@ -12,6 +12,15 @@ interface ReferenceDao {
     @Query("SELECT * FROM reference_values WHERE id = :id LIMIT 1")
     suspend fun findById(id: java.util.UUID): ReferenceEntity?
 
+    @Query("SELECT * FROM reference_values WHERE kind = :kind AND normalizedLabel = :normalizedLabel AND scopeKey = :scopeKey AND id != :excludedId LIMIT 1")
+    suspend fun findLabelConflict(kind: String, normalizedLabel: String, scopeKey: String, excludedId: java.util.UUID): ReferenceEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(reference: ReferenceEntity)
+
+    @Query("UPDATE reference_values SET label = :label, normalizedLabel = :normalizedLabel WHERE id = :id")
+    suspend fun rename(id: java.util.UUID, label: String, normalizedLabel: String): Int
+
     @Query("SELECT * FROM reference_values WHERE kind = :kind ORDER BY label COLLATE NOCASE")
     fun observeByKind(kind: String): Flow<List<ReferenceEntity>>
 

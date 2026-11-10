@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import fr.thesdupalais.data.database.AppDatabase
 import fr.thesdupalais.data.database.ReferenceEntity
+import fr.thesdupalais.data.database.StandardReferenceSeeder
 import fr.thesdupalais.data.preferences.UserPreferences
 import fr.thesdupalais.data.preferences.UserPreferencesStore
 import fr.thesdupalais.domain.references.ReferenceLabelNormalizer
@@ -86,6 +87,21 @@ class CollectionImporterTest {
             assertTrue(cursor.moveToFirst())
             assertEquals("10000000-0000-4000-8000-000000000003", cursor.getString(0))
         }
+    }
+
+    @Test
+    fun importDoesNotRestoreOldLabelOfRenamedStandardReference() = runBlocking {
+        StandardReferenceSeeder(database).seed()
+        val green = StandardReferenceSeeds.categories.single { it.semanticKey == "GREEN" }
+        val references = fr.thesdupalais.data.database.RoomReferenceRepository(database)
+        references.rename(green.id, "Catégorie verte personnalisée")
+
+        importer.importJson(fixture())
+
+        val persisted = database.referenceDao().findById(green.id)!!
+        assertEquals("Catégorie verte personnalisée", persisted.label)
+        assertEquals("GREEN", persisted.semanticKey)
+        assertEquals(green.id, persisted.id)
     }
 
     @Test

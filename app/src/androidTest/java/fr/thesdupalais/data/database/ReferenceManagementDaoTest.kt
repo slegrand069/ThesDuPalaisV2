@@ -71,7 +71,7 @@ class ReferenceManagementDaoTest {
         database.teaDao().insertMoments(listOf(TeaMomentEntity(tea.id, moment.id)))
         database.teaDao().insertBadges(listOf(TeaBadgeEntity(tea.id, badge.id)))
 
-        val repository = RoomReferenceRepository(database.referenceDao())
+        val repository = RoomReferenceRepository(database)
         suspend fun usage(kind: ReferenceKind, id: UUID) =
             repository.observe(kind).first().single { it.value.id == id }
 

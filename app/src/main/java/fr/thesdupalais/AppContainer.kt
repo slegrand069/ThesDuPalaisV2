@@ -20,7 +20,7 @@ class AppContainer(context: Context) : FirstRunOperations {
     ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
 
     val preferences = LocalPreferencesRepository(context)
-    val referenceRepository = RoomReferenceRepository(database.referenceDao())
+    val referenceRepository = RoomReferenceRepository(database)
     val collectionImporter = CollectionImporter(database, preferences)
 
     override suspend fun initialize() {

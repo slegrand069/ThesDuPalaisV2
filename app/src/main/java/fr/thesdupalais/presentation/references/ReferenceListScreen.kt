@@ -15,11 +15,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -29,11 +33,15 @@ import fr.thesdupalais.domain.model.ReferenceSummary
 fun ReferenceListScreen(
     viewModel: ReferenceListViewModel,
     onBack: () -> Unit,
+    onCreate: () -> Unit,
+    onRename: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     ReferenceListContent(
         state = state,
         onBack = onBack,
+        onCreate = onCreate,
+        onRename = onRename,
     )
 }
 
@@ -41,6 +49,8 @@ fun ReferenceListScreen(
 internal fun ReferenceListContent(
     state: ReferenceListUiState,
     onBack: () -> Unit,
+    onCreate: () -> Unit = {},
+    onRename: (String) -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(
@@ -82,13 +92,14 @@ internal fun ReferenceListContent(
             state.isLoading -> ReferenceEmptyMessage("Chargement des valeurs…")
             state.references.isEmpty() && sections == null -> ReferenceEmptyMessage("Aucune valeur dans ce référentiel")
             else -> {
+                Column(Modifier.fillMaxSize()) {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().testTag("reference-list-${state.kind.name}"),
+                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("reference-list-${state.kind.name}"),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (sections == null) {
                         items(state.references, key = { it.value.id.toString() }) { item ->
-                            ReferenceRow(item)
+                            ReferenceRow(item, onRename)
                         }
                     } else {
                         sections.forEachIndexed { index, section ->
@@ -109,12 +120,18 @@ internal fun ReferenceListContent(
                                 }
                             } else {
                                 items(section.references, key = { it.value.id.toString() }) { item ->
-                                    ReferenceRow(item)
+                                    ReferenceRow(item, onRename)
                                 }
                             }
                         }
                     }
                     item { Spacer(Modifier.height(12.dp)) }
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.End) {
+                    FloatingActionButton(onClick = onCreate, modifier = Modifier.testTag("reference-create")) {
+                        Text("＋", style = MaterialTheme.typography.headlineSmall)
+                    }
+                }
                 }
             }
         }
@@ -122,7 +139,7 @@ internal fun ReferenceListContent(
 }
 
 @Composable
-private fun ReferenceRow(item: ReferenceSummary) {
+private fun ReferenceRow(item: ReferenceSummary, onRename: (String) -> Unit) {
     val usageText = buildList {
         if (item.teaUsageCount > 0) {
             add("${item.teaUsageCount} ${if (item.teaUsageCount == 1) "thé" else "thés"}")
@@ -138,22 +155,21 @@ private fun ReferenceRow(item: ReferenceSummary) {
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.Center,
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = item.displayLabel(),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = if (usageText.isNotEmpty()) "Utilisée · $usageText" else "Disponible",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (item.teaUsageCount > 0) MaterialTheme.colorScheme.secondary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Text(item.displayLabel(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                Text(if (usageText.isNotEmpty()) "Utilisée · $usageText" else "Disponible", style = MaterialTheme.typography.labelSmall,
+                    color = if (item.teaUsageCount > 0) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = { onRename(item.value.id.toString()) }, modifier = Modifier.testTag("reference-rename-${item.value.id}")) {
+                Text("✎", modifier = Modifier.semantics { contentDescription = "Renommer ${item.value.label}" })
+            }
+            IconButton(onClick = {}, enabled = false, modifier = Modifier.testTag("reference-delete-disabled-${item.value.id}")) {
+                Text("⌫", modifier = Modifier.semantics { contentDescription = "Suppression désactivée" })
+            }
         }
     }
 }

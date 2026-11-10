@@ -41,6 +41,17 @@ class NavigationSmokeTest {
     }
 
     @Test
+    fun categoryListOpensCreationFormAndReturnsWithoutWriting() {
+        openCatalogueIfFirstRun()
+        composeRule.onNodeWithTag("bottom-tab-parametres").performClick()
+        composeRule.onNodeWithTag("settings-reference-CATEGORY").performClick()
+        composeRule.onNodeWithTag("reference-create").performClick()
+        composeRule.onNodeWithTag("reference-label-input").assertIsDisplayed()
+        composeRule.onNodeWithTag("reference-cancel").performClick()
+        composeRule.onNodeWithTag("reference-list-title-CATEGORY").assertIsDisplayed()
+    }
+
+    @Test
     fun bottomBarStaysAboveTheSystemNavigationInset() {
         openCatalogueIfFirstRun()
         composeRule.onNodeWithTag("main-bottom-bar").assertIsDisplayed()

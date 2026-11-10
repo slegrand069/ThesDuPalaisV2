@@ -48,6 +48,9 @@ import fr.thesdupalais.presentation.references.ReferenceFamily
 import fr.thesdupalais.presentation.references.ReferenceListScreen
 import fr.thesdupalais.presentation.references.ReferenceListViewModel
 import fr.thesdupalais.presentation.references.ReferenceListViewModelFactory
+import fr.thesdupalais.presentation.references.ReferenceEditScreen
+import fr.thesdupalais.presentation.references.ReferenceEditViewModel
+import fr.thesdupalais.presentation.references.ReferenceEditViewModelFactory
 import fr.thesdupalais.presentation.references.referenceFamilies
 import fr.thesdupalais.presentation.settings.SettingsViewModel
 import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
@@ -63,6 +66,8 @@ import java.util.UUID
 
 private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
 private const val REFERENCE_LIST_ROUTE = "references/{kind}"
+private const val REFERENCE_CREATE_ROUTE = "references/{kind}/create"
+private const val REFERENCE_EDIT_ROUTE = "references/{kind}/edit/{referenceId}"
 
 private enum class MainDestination(val route: String, val label: String, val icon: String) {
     CATALOGUE("catalogue", "Catalogue", "catalogue"),
@@ -158,7 +163,35 @@ fun AppNavigation(container: AppContainer) {
                         key = "reference-list-${kind.name}",
                         factory = ReferenceListViewModelFactory(container.referenceRepository, kind),
                     )
-                    ReferenceListScreen(referenceViewModel) { navController.popBackStack() }
+                    ReferenceListScreen(
+                        viewModel = referenceViewModel,
+                        onBack = { navController.popBackStack() },
+                        onCreate = { navController.navigate("references/${kind.name}/create") },
+                        onRename = { id -> navController.navigate("references/${kind.name}/edit/$id") },
+                    )
+                }
+            }
+            composable(REFERENCE_CREATE_ROUTE, arguments = listOf(navArgument("kind") { type = NavType.StringType })) { entry ->
+                val kind = entry.arguments?.getString("kind")?.let { runCatching { ReferenceKind.valueOf(it) }.getOrNull() }
+                if (kind == null) InvalidReferenceScreen(onBack = { navController.popBackStack() }) else {
+                    val vm: ReferenceEditViewModel = viewModel(
+                        key = "reference-create-${kind.name}",
+                        factory = ReferenceEditViewModelFactory(container.referenceRepository, kind, null),
+                    )
+                    ReferenceEditScreen(vm, onCancel = { navController.popBackStack() }, onSaved = { navController.popBackStack() })
+                }
+            }
+            composable(REFERENCE_EDIT_ROUTE, arguments = listOf(
+                navArgument("kind") { type = NavType.StringType }, navArgument("referenceId") { type = NavType.StringType },
+            )) { entry ->
+                val kind = entry.arguments?.getString("kind")?.let { runCatching { ReferenceKind.valueOf(it) }.getOrNull() }
+                val id = entry.arguments?.getString("referenceId")?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (kind == null || id == null) InvalidReferenceScreen(onBack = { navController.popBackStack() }) else {
+                    val vm: ReferenceEditViewModel = viewModel(
+                        key = "reference-edit-$id",
+                        factory = ReferenceEditViewModelFactory(container.referenceRepository, kind, id),
+                    )
+                    ReferenceEditScreen(vm, onCancel = { navController.popBackStack() }, onSaved = { navController.popBackStack() })
                 }
             }
             composable(
