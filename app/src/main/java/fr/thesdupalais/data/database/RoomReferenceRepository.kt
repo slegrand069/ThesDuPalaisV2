@@ -4,7 +4,9 @@ import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceSummary
 import fr.thesdupalais.domain.model.ReferenceValue
 import fr.thesdupalais.domain.references.ReferenceLabelNormalizer
+import fr.thesdupalais.domain.references.StandardReferenceSeeds
 import androidx.room.withTransaction
+import android.database.sqlite.SQLiteConstraintException
 import java.util.UUID
 import java.text.Normalizer
 import kotlinx.coroutines.flow.Flow
@@ -30,6 +32,45 @@ class RoomReferenceRepository(private val database: AppDatabase) {
         .map { refs -> refs.map { it.toDomain() } }
 
     suspend fun find(id: UUID): ReferenceValue? = dao.findById(id)?.toDomain()
+
+    suspend fun checkDeletion(id: UUID): ReferenceDeletionStatus = database.withTransaction {
+        val reference = dao.findById(id) ?: return@withTransaction ReferenceDeletionStatus.Missing
+        if (isSeedManaged(reference)) return@withTransaction ReferenceDeletionStatus.Standard
+        val teaCount = dao.countTeaUsage(reference.kind, id)
+        val regionCount = if (reference.kind == ReferenceKind.COUNTRY.name) dao.countChildRegions(id) else 0
+        when {
+            teaCount > 0 -> ReferenceDeletionStatus.InUse(teaCount, regionCount)
+            regionCount > 0 -> ReferenceDeletionStatus.HasRegions(regionCount)
+            else -> ReferenceDeletionStatus.Eligible
+        }
+    }
+
+    suspend fun deleteIfUnused(id: UUID): ReferenceDeletionStatus = database.withTransaction {
+        val reference = dao.findById(id) ?: return@withTransaction ReferenceDeletionStatus.Missing
+        if (isSeedManaged(reference)) return@withTransaction ReferenceDeletionStatus.Standard
+        val status = deletionStatus(reference)
+        if (status != ReferenceDeletionStatus.Eligible) return@withTransaction status
+        try {
+            if (dao.deleteById(id) == 1) ReferenceDeletionStatus.Deleted else ReferenceDeletionStatus.Missing
+        } catch (_: SQLiteConstraintException) {
+            val latest = deletionStatus(reference)
+            if (latest == ReferenceDeletionStatus.Eligible) ReferenceDeletionStatus.RestrictedByDependency else latest
+        }
+    }
+
+    private suspend fun deletionStatus(reference: ReferenceEntity): ReferenceDeletionStatus {
+        val teaCount = dao.countTeaUsage(reference.kind, reference.id)
+        val regionCount = if (reference.kind == ReferenceKind.COUNTRY.name) dao.countChildRegions(reference.id) else 0
+        return when {
+            teaCount > 0 -> ReferenceDeletionStatus.InUse(teaCount, regionCount)
+            regionCount > 0 -> ReferenceDeletionStatus.HasRegions(regionCount)
+            else -> ReferenceDeletionStatus.Eligible
+        }
+    }
+
+    private fun isSeedManaged(reference: ReferenceEntity): Boolean = StandardReferenceSeeds.all.any {
+        it.kind.name == reference.kind && it.semanticKey != null && it.semanticKey == reference.semanticKey
+    }
 
     suspend fun create(kind: ReferenceKind, rawLabel: String, parentCountryId: UUID? = null): UUID =
         database.withTransaction {
@@ -71,4 +112,14 @@ class RoomReferenceRepository(private val database: AppDatabase) {
         require(cleaned.length <= 100) { "Le nom ne peut pas dépasser 100 caractères." }
         return cleaned
     }
+}
+
+sealed interface ReferenceDeletionStatus {
+    data object Eligible : ReferenceDeletionStatus
+    data object Deleted : ReferenceDeletionStatus
+    data object Standard : ReferenceDeletionStatus
+    data object Missing : ReferenceDeletionStatus
+    data object RestrictedByDependency : ReferenceDeletionStatus
+    data class InUse(val teaCount: Int, val regionCount: Int = 0) : ReferenceDeletionStatus
+    data class HasRegions(val regionCount: Int) : ReferenceDeletionStatus
 }

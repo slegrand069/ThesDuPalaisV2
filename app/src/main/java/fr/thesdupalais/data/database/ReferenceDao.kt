@@ -21,6 +21,28 @@ interface ReferenceDao {
     @Query("UPDATE reference_values SET label = :label, normalizedLabel = :normalizedLabel WHERE id = :id")
     suspend fun rename(id: java.util.UUID, label: String, normalizedLabel: String): Int
 
+    @Query("""
+        SELECT CASE :kind
+            WHEN 'CATEGORY' THEN (SELECT COUNT(*) FROM teas WHERE categoryRefId = :id)
+            WHEN 'STATUS' THEN (SELECT COUNT(*) FROM teas WHERE statusRefId = :id)
+            WHEN 'CONTAINER' THEN (SELECT COUNT(*) FROM teas WHERE containerRefId = :id)
+            WHEN 'COUNTRY' THEN (SELECT COUNT(DISTINCT teaId) FROM tea_countries WHERE countryRefId = :id)
+            WHEN 'REGION' THEN (SELECT COUNT(DISTINCT teaId) FROM tea_regions WHERE regionRefId = :id)
+            WHEN 'AROMA' THEN (SELECT COUNT(DISTINCT teaId) FROM tea_aromas WHERE aromaRefId = :id)
+            WHEN 'AROMATIC_PROFILE' THEN (SELECT COUNT(DISTINCT teaId) FROM tea_aromatic_profiles WHERE profileRefId = :id)
+            WHEN 'MOMENT' THEN (SELECT COUNT(DISTINCT teaId) FROM tea_moments WHERE momentRefId = :id)
+            WHEN 'BADGE' THEN (SELECT COUNT(DISTINCT teaId) FROM tea_badges WHERE badgeRefId = :id)
+            ELSE 0
+        END
+    """)
+    suspend fun countTeaUsage(kind: String, id: java.util.UUID): Int
+
+    @Query("SELECT COUNT(*) FROM reference_values WHERE kind = 'REGION' AND parentCountryId = :countryId")
+    suspend fun countChildRegions(countryId: java.util.UUID): Int
+
+    @Query("DELETE FROM reference_values WHERE id = :id")
+    suspend fun deleteById(id: java.util.UUID): Int
+
     @Query("SELECT * FROM reference_values WHERE kind = :kind ORDER BY label COLLATE NOCASE")
     fun observeByKind(kind: String): Flow<List<ReferenceEntity>>
 

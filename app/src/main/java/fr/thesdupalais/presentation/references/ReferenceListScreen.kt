@@ -17,6 +17,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -28,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.thesdupalais.domain.model.ReferenceSummary
+import fr.thesdupalais.data.database.ReferenceDeletionStatus
+import java.util.UUID
 
 @Composable
 fun ReferenceListScreen(
@@ -35,6 +39,9 @@ fun ReferenceListScreen(
     onBack: () -> Unit,
     onCreate: () -> Unit,
     onRename: (String) -> Unit,
+    onDelete: (UUID) -> Unit,
+    onDismissDelete: () -> Unit,
+    onConfirmDelete: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     ReferenceListContent(
@@ -42,6 +49,9 @@ fun ReferenceListScreen(
         onBack = onBack,
         onCreate = onCreate,
         onRename = onRename,
+        onDelete = onDelete,
+        onDismissDelete = onDismissDelete,
+        onConfirmDelete = onConfirmDelete,
     )
 }
 
@@ -51,6 +61,9 @@ internal fun ReferenceListContent(
     onBack: () -> Unit,
     onCreate: () -> Unit = {},
     onRename: (String) -> Unit = {},
+    onDelete: (UUID) -> Unit = {},
+    onDismissDelete: () -> Unit = {},
+    onConfirmDelete: () -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(
@@ -99,7 +112,7 @@ internal fun ReferenceListContent(
                 ) {
                     if (sections == null) {
                         items(state.references, key = { it.value.id.toString() }) { item ->
-                            ReferenceRow(item, onRename)
+                            ReferenceRow(item, onRename, onDelete)
                         }
                     } else {
                         sections.forEachIndexed { index, section ->
@@ -120,7 +133,7 @@ internal fun ReferenceListContent(
                                 }
                             } else {
                                 items(section.references, key = { it.value.id.toString() }) { item ->
-                                    ReferenceRow(item, onRename)
+                                    ReferenceRow(item, onRename, onDelete)
                                 }
                             }
                         }
@@ -136,10 +149,51 @@ internal fun ReferenceListContent(
             }
         }
     }
+    state.deletePrompt?.let { prompt ->
+        val blocked = prompt.status != ReferenceDeletionStatus.Eligible
+        val (title, message) = when (val status = prompt.status) {
+            ReferenceDeletionStatus.Eligible -> "Supprimer cette valeur ?" to
+                "« ${prompt.label} » n’est liée à aucun thé. La suppression sera définitive."
+            ReferenceDeletionStatus.Standard -> "Référence standard protégée" to
+                "« ${prompt.label} » est gérée par les références standard et ne peut pas être supprimée. Vous pouvez la renommer."
+            is ReferenceDeletionStatus.InUse -> {
+                val count = status.teaCount
+                val teaText = "« ${prompt.label} » est associée à $count ${if (count == 1) "thé" else "thés"}."
+                val regionText = if (status.regionCount > 0) " Elle possède aussi ${status.regionCount} ${if (status.regionCount == 1) "région" else "régions"}." else ""
+                "Suppression impossible" to "$teaText$regionText Pour éviter toute perte d’association, cette valeur ne peut pas être supprimée tant qu’elle est utilisée. Vous pouvez la renommer ; les liens seront conservés."
+            }
+            is ReferenceDeletionStatus.HasRegions -> "Suppression impossible" to
+                "« ${prompt.label} » possède ${status.regionCount} ${if (status.regionCount == 1) "région" else "régions"}. Supprimez d’abord ses régions."
+            ReferenceDeletionStatus.Missing -> "Valeur indisponible" to "Cette valeur n’existe plus dans le référentiel."
+            ReferenceDeletionStatus.RestrictedByDependency -> "Suppression impossible" to
+                "Cette valeur vient d’être utilisée ou possède une dépendance. Elle n’a pas été supprimée. Vous pouvez la renommer."
+            ReferenceDeletionStatus.Deleted -> "Valeur supprimée" to "La valeur a été supprimée."
+        }
+        AlertDialog(
+            onDismissRequest = { if (!state.isDeleting) onDismissDelete() },
+            title = { Text(title, modifier = Modifier.testTag("reference-delete-dialog-title")) },
+            text = {
+                Column {
+                    Text(message, modifier = Modifier.testTag("reference-delete-dialog-message"))
+                    if (!blocked) Text("La confirmation est demandée avant suppression.", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                if (blocked) {
+                    TextButton(onClick = onDismissDelete, modifier = Modifier.testTag("reference-delete-understood")) { Text("Compris") }
+                } else {
+                    TextButton(onClick = onConfirmDelete, enabled = !state.isDeleting, modifier = Modifier.testTag("reference-delete-confirm")) { Text("Supprimer") }
+                }
+            },
+            dismissButton = if (blocked) null else ({
+                TextButton(onClick = onDismissDelete, enabled = !state.isDeleting, modifier = Modifier.testTag("reference-delete-cancel")) { Text("Annuler") }
+            }),
+        )
+    }
 }
 
 @Composable
-private fun ReferenceRow(item: ReferenceSummary, onRename: (String) -> Unit) {
+private fun ReferenceRow(item: ReferenceSummary, onRename: (String) -> Unit, onDelete: (UUID) -> Unit) {
     val usageText = buildList {
         if (item.teaUsageCount > 0) {
             add("${item.teaUsageCount} ${if (item.teaUsageCount == 1) "thé" else "thés"}")
@@ -167,8 +221,8 @@ private fun ReferenceRow(item: ReferenceSummary, onRename: (String) -> Unit) {
             IconButton(onClick = { onRename(item.value.id.toString()) }, modifier = Modifier.testTag("reference-rename-${item.value.id}")) {
                 Text("✎", modifier = Modifier.semantics { contentDescription = "Renommer ${item.value.label}" })
             }
-            IconButton(onClick = {}, enabled = false, modifier = Modifier.testTag("reference-delete-disabled-${item.value.id}")) {
-                Text("⌫", modifier = Modifier.semantics { contentDescription = "Suppression désactivée" })
+            IconButton(onClick = { onDelete(item.value.id) }, modifier = Modifier.testTag("reference-delete-${item.value.id}")) {
+                Text("×", modifier = Modifier.semantics { contentDescription = "Supprimer ${item.value.label}" })
             }
         }
     }

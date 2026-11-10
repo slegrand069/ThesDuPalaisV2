@@ -168,6 +168,9 @@ fun AppNavigation(container: AppContainer) {
                         onBack = { navController.popBackStack() },
                         onCreate = { navController.navigate("references/${kind.name}/create") },
                         onRename = { id -> navController.navigate("references/${kind.name}/edit/$id") },
+                        onDelete = referenceViewModel::requestDelete,
+                        onDismissDelete = referenceViewModel::dismissDeletePrompt,
+                        onConfirmDelete = referenceViewModel::confirmDelete,
                     )
                 }
             }
