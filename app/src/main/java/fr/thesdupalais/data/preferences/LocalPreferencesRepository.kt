@@ -27,8 +27,10 @@ interface UserPreferencesStore {
     suspend fun setPreferences(preferences: UserPreferences)
 }
 
-class LocalPreferencesRepository(context: Context) : UserPreferencesStore {
-    private val dataStore = context.applicationContext.settingsDataStore
+class LocalPreferencesRepository internal constructor(
+    private val dataStore: DataStore<Preferences>,
+) : UserPreferencesStore {
+    constructor(context: Context) : this(context.applicationContext.settingsDataStore)
 
     val preferences: Flow<UserPreferences> = dataStore.data.map { values ->
         UserPreferences(

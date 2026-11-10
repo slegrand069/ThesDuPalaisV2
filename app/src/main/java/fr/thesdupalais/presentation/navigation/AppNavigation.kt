@@ -54,6 +54,7 @@ import fr.thesdupalais.presentation.references.ReferenceEditViewModelFactory
 import fr.thesdupalais.presentation.references.referenceFamilies
 import fr.thesdupalais.presentation.settings.SettingsViewModel
 import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
+import fr.thesdupalais.presentation.settings.SettingsPreferencesSection
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModelFactory
@@ -283,6 +284,7 @@ private fun KnowledgeScreen() {
 @Composable
 private fun SettingsScreen(viewModel: SettingsViewModel, onOpenReference: (ReferenceKind) -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
+    val preferencesLoaded by viewModel.preferencesLoaded.collectAsStateWithLifecycle()
     Column(
         modifier = Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
@@ -308,9 +310,12 @@ private fun SettingsScreen(viewModel: SettingsViewModel, onOpenReference: (Refer
         Spacer(Modifier.height(14.dp))
         Text("Préférences", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
-        PreferenceCard("Grammage estimé par tasse", formatGrams(preferences.gramsPerCupMilli))
-        Spacer(Modifier.height(10.dp))
-        PreferenceCard("Seuil de stock faible", formatGrams(preferences.lowStockThresholdMilli))
+        SettingsPreferencesSection(
+            preferences = preferences,
+            preferencesLoaded = preferencesLoaded,
+            onUpdateGramsPerCupMilli = viewModel::updateGramsPerCupMilli,
+            onUpdateLowStockThresholdMilli = viewModel::updateLowStockThresholdMilli,
+        )
     }
 }
 
@@ -381,28 +386,4 @@ internal fun EmptyState(title: String, message: String) {
             Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-}
-
-@Composable
-private fun PreferenceCard(label: String, value: String) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Text(value, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-        }
-    }
-}
-
-private fun formatGrams(milliGrams: Long): String {
-    val grams = milliGrams / 1_000.0
-    return if (milliGrams % 1_000L == 0L) "${milliGrams / 1_000L} g" else "$grams g"
 }
