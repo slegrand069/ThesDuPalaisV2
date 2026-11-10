@@ -77,11 +77,23 @@ internal fun TeaFormContent(
                 modifier = Modifier.testTag("tea-form-back"),
             ) { Text("‹", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.headlineSmall) }
             Column(Modifier.padding(start = 12.dp)) {
-                Text("Ajouter un thé", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("Renseignez les informations connues", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                Text(if (state.editTeaId == null) "Ajouter un thé" else "Modifier le thé", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(if (state.editTeaId == null) "Renseignez les informations connues" else "Modifiez les informations du thé", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
         }
 
+        if (state.isLoadingTea || state.teaUnavailable) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (state.isLoadingTea) "Chargement du thé…" else state.error ?: "Ce thé n’est plus disponible.",
+                    color = if (state.teaUnavailable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag(if (state.isLoadingTea) "tea-form-loading-tea" else "tea-form-unavailable"),
+                )
+            }
+        } else {
         Column(
             modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -169,6 +181,7 @@ internal fun TeaFormContent(
             }
             if (state.isLoadingReferences) Text("Chargement des référentiels…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("tea-form-loading"))
         }
+        }
 
         Column(
             modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding()
@@ -180,7 +193,7 @@ internal fun TeaFormContent(
                 TextButton(onClick = requestCancel, enabled = !state.isSaving, modifier = Modifier.weight(1f).testTag("tea-form-cancel")) { Text("Annuler") }
                 Button(
                     onClick = { viewModel.save(onSaved) },
-                    enabled = !state.isSaving && !state.isSaved && !state.isLoadingReferences,
+                    enabled = !state.isSaving && !state.isSaved && !state.isLoadingReferences && !state.isLoadingTea && !state.teaUnavailable,
                     modifier = Modifier.weight(1.5f).testTag("tea-form-save"),
                 ) { Text(if (state.isSaving) "Enregistrement…" else "Enregistrer") }
             }
@@ -198,7 +211,7 @@ internal fun TeaFormContent(
     if (showAbandonDialog) {
         AlertDialog(
             onDismissRequest = { showAbandonDialog = false },
-            title = { Text("Abandonner la création ?") },
+            title = { Text(if (state.editTeaId == null) "Abandonner la création ?" else "Abandonner les modifications ?") },
             text = { Text("Les informations saisies ne seront pas enregistrées.") },
             confirmButton = {
                 TextButton(onClick = onCancel, modifier = Modifier.testTag("tea-form-abandon-confirm")) { Text("Abandonner") }
@@ -245,8 +258,9 @@ private fun ReferenceChips(options: List<ReferenceValue>, selected: Set<UUID>, o
         options.forEach { reference ->
             FilterChip(
                 selected = reference.id in selected,
+                enabled = reference.archivedAt == null || reference.id in selected,
                 onClick = { onToggle(reference.id, reference.id !in selected) },
-                label = { Text(reference.label) },
+                label = { Text(reference.label + if (reference.archivedAt != null) " (archivée)" else "") },
                 modifier = Modifier.testTag("$tag-${reference.id}"),
             )
         }
@@ -294,7 +308,8 @@ private fun ReferencePickerButton(
     onOpen: (ReferenceKind) -> Unit,
 ) {
     val selectedIds = selectedIds(state, kind)
-    val labels = state.references[kind].orEmpty().filter { it.id in selectedIds }.map { it.label }
+    val labels = state.references[kind].orEmpty().filter { it.id in selectedIds }
+        .map { it.label + if (it.archivedAt != null) " (archivée)" else "" }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(title, style = MaterialTheme.typography.labelLarge)
         Surface(
@@ -348,14 +363,22 @@ private fun ReferenceSelectionDialog(
                     }
                     options.filter { it.label.contains(query.trim(), ignoreCase = true) }.forEach { reference ->
                         Row(
-                            Modifier.fillMaxWidth().clickable {
+                            Modifier.fillMaxWidth().clickable(enabled = reference.archivedAt == null || reference.id in draft) {
                                 draft = if (multiple) draft.toggleMembership(reference.id) else if (reference.id in draft) emptySet() else setOf(reference.id)
                             }.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (multiple) Checkbox(reference.id in draft, onCheckedChange = { checked -> draft = draft.toggle(reference.id, checked) })
-                            else RadioButton(reference.id in draft, onClick = { draft = setOf(reference.id) })
-                            Text(reference.label)
+                            if (multiple) Checkbox(
+                                checked = reference.id in draft,
+                                onCheckedChange = { checked -> draft = draft.toggle(reference.id, checked) },
+                                enabled = reference.archivedAt == null || reference.id in draft,
+                            )
+                            else RadioButton(
+                                selected = reference.id in draft,
+                                onClick = { draft = setOf(reference.id) },
+                                enabled = reference.archivedAt == null || reference.id in draft,
+                            )
+                            Text(reference.label + if (reference.archivedAt != null) " (archivée)" else "")
                         }
                     }
                     }
@@ -403,9 +426,13 @@ private fun OptionalTemperatureSlider(value: Int?, onValueChange: (Int?) -> Unit
             Text("Non renseignée", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { onValueChange(60) }, modifier = Modifier.testTag("tea-form-temperature-set")) { Text("Renseigner") }
         } else {
-            Text("$value °C", modifier = Modifier.testTag("tea-form-temperature-value"))
+            val isStandardSliderValue = value in 60..100 && value % 5 == 0
+            Text(
+                text = if (isStandardSliderValue) "$value °C" else "$value °C · valeur historique",
+                modifier = Modifier.testTag("tea-form-temperature-value"),
+            )
             Slider(
-                value = value.toFloat(),
+                value = value.toFloat().coerceIn(60f, 100f),
                 onValueChange = { onValueChange(temperatureFromSliderPosition(it)) },
                 valueRange = 60f..100f,
                 steps = 7,

@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -24,6 +25,7 @@ class TeaDetailScreenTest {
     @Test fun showsRealDetailFieldsAndHistoricalTastingsWithoutWriteActions() {
         val occurredAt = ZonedDateTime.of(2026, 11, 1, 14, 30, 0, 0, ZoneId.of("Europe/Paris")).toInstant().toEpochMilli()
         var backPressed = false
+        var editedTeaId: UUID? = null
         composeRule.setContent {
             ThesDuPalaisTheme {
                 TeaDetailContent(
@@ -32,6 +34,7 @@ class TeaDetailScreenTest {
                         tastings = listOf(TeaTasting(UUID.randomUUID(), occurredAt, 1_250L)),
                     ),
                     onBack = { backPressed = true },
+                    onEdit = { editedTeaId = it },
                 )
             }
         }
@@ -47,7 +50,8 @@ class TeaDetailScreenTest {
         assertTextExists("Végétal")
         assertTextExists(formatTastingDateTime(occurredAt))
         assertTextExists("Quantité consommée · 1,25 g")
-        composeRule.onNodeWithTag("tea-detail-edit-disabled").assertIsNotEnabled()
+        composeRule.onNodeWithTag("tea-detail-edit").assertIsEnabled().performClick()
+        org.junit.Assert.assertEquals(detail().id, editedTeaId)
         composeRule.onAllNodesWithText("STOCK & CONTENANT").assertCountEquals(0)
         composeRule.onAllNodesWithText("GALERIE PHOTOS").assertCountEquals(0)
         composeRule.onAllNodesWithText("En déguster un").assertCountEquals(0)
@@ -79,7 +83,8 @@ class TeaDetailScreenTest {
                         ),
                         tastings = emptyList(),
                     ),
-                ) {}
+                    onBack = {},
+                )
             }
         }
 
@@ -92,10 +97,10 @@ class TeaDetailScreenTest {
     }
 
     @Test fun showsUnavailableForAbsentOrArchivedTeaState() {
-        composeRule.setContent { ThesDuPalaisTheme { TeaDetailContent(TeaDetailUiState.Unavailable) {} } }
+        composeRule.setContent { ThesDuPalaisTheme { TeaDetailContent(TeaDetailUiState.Unavailable, onBack = {}) } }
 
         composeRule.onNodeWithText("Ce thé n’est pas disponible dans le catalogue.").assertIsDisplayed()
-        composeRule.onNodeWithTag("tea-detail-edit-disabled").assertIsNotEnabled()
+        composeRule.onNodeWithTag("tea-detail-edit").assertIsNotEnabled()
     }
 
     private fun detail() = TeaDetail(

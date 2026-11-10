@@ -156,20 +156,176 @@ class TeaRepositoryTest {
         val teaId = try {
             StandardReferenceSeeder(first).seed()
             val category = requireNotNull(first.referenceDao().findBySemanticKey("CATEGORY", "GREEN"))
-            TeaRepository(first).create(NewTea(name = "Persistent tea", categoryId = category.id))
+            val repository = TeaRepository(first)
+            val id = repository.create(NewTea(name = "Persistent tea", categoryId = category.id))
+            val loaded = requireNotNull(repository.loadForEdit(id))
+            repository.update(id, loaded.values.copy(name = "Persistent edited tea"), setOf(TeaEditableField.NAME))
+            id
         } finally {
             first.close()
         }
         val reopened = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).build()
         try {
             val saved = requireNotNull(reopened.teaDao().findById(teaId))
-            assertEquals("Persistent tea", saved.name)
+            assertEquals("Persistent edited tea", saved.name)
             assertNull(saved.stockMilliGrams)
             assertEquals(0, reopened.tastingDao().count())
         } finally {
             reopened.close()
             context.deleteDatabase(databaseName)
         }
+    }
+
+    @Test fun nameEditPreservesImportedTemperatureIdentityStockHistoryPhotosAndArchivedReferences() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val status = standard(ReferenceKind.STATUS)
+        val country = reference(ReferenceKind.COUNTRY, "Pays conservé")
+        val region = reference(ReferenceKind.REGION, "Région conservée", country.id)
+        val archivedAroma = reference(ReferenceKind.AROMA, "Arôme archivé", archivedAt = 123L)
+        val teaId = UUID.randomUUID()
+        val legacyId = 2L
+        database.teaDao().insert(
+            TeaEntity(
+                id = teaId, legacyId = legacyId, name = "Nom importé", categoryRefId = category.id,
+                description = "Description originale", technicalInformation = "Informations importées",
+                personalNotes = "Notes importées", olfactoryRating = 7.25, tasteRating = 8.35,
+                brewTemperatureCelsius = 82, infusionDurationSeconds = 125, statusRefId = status.id,
+                containerRefId = null, stockMilliGrams = 42_000L, archivedAtEpochMillis = null,
+            ),
+        )
+        database.teaDao().insertCountries(listOf(TeaCountryEntity(teaId, country.id)))
+        database.teaDao().insertRegions(listOf(TeaRegionEntity(teaId, region.id, country.id)))
+        database.teaDao().insertAromas(listOf(TeaAromaEntity(teaId, archivedAroma.id)))
+        val tastingId = UUID.randomUUID()
+        database.tastingDao().insert(TastingEntity(tastingId, teaId, 100L, 200L, 7_000L))
+        val movementId = UUID.randomUUID()
+        database.stockMovementDao().insert(
+            StockMovementEntity(movementId, teaId, "CONSUMPTION", -7_000L, 42_000L, 100L, 200L, tastingId, "Historique conservé"),
+        )
+        val photoId = UUID.randomUUID()
+        database.teaPhotoDao().insert(TeaPhotoEntity(photoId, teaId, "photos/importee.jpg", 0))
+
+        val loaded = requireNotNull(repository.loadForEdit(teaId))
+        assertEquals(82, loaded.values.brewTemperatureCelsius)
+        assertEquals("Arôme archivé", loaded.references.getValue(ReferenceKind.AROMA).single().label)
+        val updatedValues = loaded.values.copy(name = "Nom modifié")
+        assertTrue(repository.update(teaId, updatedValues, setOf(TeaEditableField.NAME)))
+
+        val saved = requireNotNull(database.teaDao().findById(teaId))
+        assertEquals("Nom modifié", saved.name)
+        assertEquals(teaId, saved.id)
+        assertEquals(legacyId, saved.legacyId)
+        assertEquals(82, saved.brewTemperatureCelsius)
+        assertEquals(42_000L, saved.stockMilliGrams)
+        assertEquals("Description originale", saved.description)
+        assertEquals("Notes importées", saved.personalNotes)
+        assertEquals(8.35, saved.tasteRating!!, 0.0)
+        assertEquals(1, database.tastingDao().count())
+        assertEquals(movementId, database.stockMovementDao().observeForTea(teaId).first().single().id)
+        assertEquals(photoId, database.teaPhotoDao().observeForTea(teaId).first().single().id)
+        assertEquals(setOf(country.id), database.teaDao().observeActiveDetail(teaId).first()!!.countries.map { it.id }.toSet())
+        assertEquals(setOf(region.id), database.teaDao().observeActiveDetail(teaId).first()!!.regions.map { it.id }.toSet())
+        assertEquals(setOf(archivedAroma.id), database.teaDao().observeActiveDetail(teaId).first()!!.aromas.map { it.id }.toSet())
+    }
+
+    @Test fun unchangedEditSkipsAllWrites() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Sans changement", category.id))
+        val loaded = requireNotNull(repository.loadForEdit(teaId))
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_tea_updates BEFORE UPDATE ON teas BEGIN SELECT RAISE(ABORT, 'unexpected write'); END",
+        )
+
+        assertEquals(false, repository.update(teaId, loaded.values, emptySet()))
+        assertEquals("Sans changement", database.teaDao().findById(teaId)?.name)
+    }
+
+    @Test fun changedAssociationsAreAtomicAndNullableFieldsCanBeCleared() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val oldAroma = reference(ReferenceKind.AROMA, "Ancien arôme")
+        val newAroma = reference(ReferenceKind.AROMA, "Nouvel arôme")
+        val teaId = repository.create(NewTea("Fiche", category.id, aromaIds = listOf(oldAroma.id), description = "À effacer", personalNotes = "À effacer", tasteRating = 8.4, brewTemperatureCelsius = 80))
+        val loaded = requireNotNull(repository.loadForEdit(teaId))
+        val update = loaded.values.copy(
+            name = "Nom à annuler par rollback", aromaIds = listOf(newAroma.id), description = null,
+            personalNotes = null, tasteRating = null, brewTemperatureCelsius = null,
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_tea_aroma_update BEFORE INSERT ON tea_aromas BEGIN SELECT RAISE(ABORT, 'forced update failure'); END",
+        )
+        val fields = setOf(
+            TeaEditableField.NAME, TeaEditableField.AROMAS, TeaEditableField.DESCRIPTION,
+            TeaEditableField.PERSONAL_NOTES, TeaEditableField.TASTE_RATING, TeaEditableField.BREW_TEMPERATURE,
+        )
+        assertTrue(runCatching { repository.update(teaId, update, fields) }.isFailure)
+        val rolledBack = requireNotNull(database.teaDao().findById(teaId))
+        assertEquals("Fiche", rolledBack.name)
+        assertEquals("À effacer", rolledBack.description)
+        assertEquals("À effacer", rolledBack.personalNotes)
+        assertEquals(8.4, rolledBack.tasteRating!!, 0.0)
+        assertEquals(80, rolledBack.brewTemperatureCelsius)
+        assertEquals(setOf(oldAroma.id), database.teaDao().observeActiveDetail(teaId).first()!!.aromas.map { it.id }.toSet())
+    }
+
+    @Test fun editSynchronizesMultipleAssociationsAndMaintainsRegionCountryIntegrity() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val japan = reference(ReferenceKind.COUNTRY, "Japon")
+        val india = reference(ReferenceKind.COUNTRY, "Inde")
+        val shizuoka = reference(ReferenceKind.REGION, "Shizuoka", japan.id)
+        val assam = reference(ReferenceKind.REGION, "Assam", india.id)
+        val oldAroma = reference(ReferenceKind.AROMA, "Floral")
+        val newAroma = reference(ReferenceKind.AROMA, "Végétal")
+        val profile = reference(ReferenceKind.AROMATIC_PROFILE, "Frais")
+        val moment = reference(ReferenceKind.MOMENT, "Matin personnalisé")
+        val badge = reference(ReferenceKind.BADGE, "Grand cru personnalisé")
+        val teaId = repository.create(
+            NewTea("Thé multi-associations", category.id, countryIds = listOf(japan.id), regionIds = listOf(shizuoka.id), aromaIds = listOf(oldAroma.id)),
+        )
+        val loaded = requireNotNull(repository.loadForEdit(teaId))
+        val changed = loaded.values.copy(
+            countryIds = listOf(india.id), regionIds = listOf(assam.id), aromaIds = listOf(newAroma.id),
+            aromaticProfileIds = listOf(profile.id), momentIds = listOf(moment.id), badgeIds = listOf(badge.id),
+        )
+        val fields = setOf(
+            TeaEditableField.COUNTRIES, TeaEditableField.REGIONS, TeaEditableField.AROMAS,
+            TeaEditableField.PROFILES, TeaEditableField.MOMENTS, TeaEditableField.BADGES,
+        )
+        assertTrue(repository.update(teaId, changed, fields))
+        val detail = requireNotNull(database.teaDao().observeActiveDetail(teaId).first())
+        assertEquals(setOf(india.id), detail.countries.map { it.id }.toSet())
+        assertEquals(setOf(assam.id), detail.regions.map { it.id }.toSet())
+        assertEquals(setOf(newAroma.id), detail.aromas.map { it.id }.toSet())
+        assertEquals(setOf(profile.id), detail.aromaticProfiles.map { it.id }.toSet())
+        assertEquals(setOf(moment.id), detail.moments.map { it.id }.toSet())
+        assertEquals(setOf(badge.id), detail.badges.map { it.id }.toSet())
+        assertEquals(india.id, database.openHelper.writableDatabase.query(
+            "SELECT countryRefId FROM tea_regions WHERE teaId = '${teaId}'",
+        ).use { cursor -> assertTrue(cursor.moveToFirst()); UUID.fromString(cursor.getString(0)) })
+    }
+
+    @Test fun temperatureCanBeClearedOrChangedOnlyToCurrentSliderValues() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = UUID.randomUUID()
+        database.teaDao().insert(
+            TeaEntity(
+                id = teaId, legacyId = null, name = "Température historique", categoryRefId = category.id,
+                description = null, technicalInformation = null, personalNotes = null, olfactoryRating = null,
+                tasteRating = null, brewTemperatureCelsius = 82, infusionDurationSeconds = null,
+                statusRefId = null, containerRefId = null, stockMilliGrams = null, archivedAtEpochMillis = null,
+            ),
+        )
+        val loaded = requireNotNull(repository.loadForEdit(teaId))
+        assertTrue(repository.update(teaId, loaded.values.copy(brewTemperatureCelsius = null), setOf(TeaEditableField.BREW_TEMPERATURE)))
+        assertNull(database.teaDao().findById(teaId)?.brewTemperatureCelsius)
+
+        val current = requireNotNull(repository.loadForEdit(teaId))
+        assertTrue(repository.update(teaId, current.values.copy(brewTemperatureCelsius = 95), setOf(TeaEditableField.BREW_TEMPERATURE)))
+        assertEquals(95, database.teaDao().findById(teaId)?.brewTemperatureCelsius)
+        val invalid = requireNotNull(repository.loadForEdit(teaId))
+        assertTrue(runCatching {
+            repository.update(teaId, invalid.values.copy(brewTemperatureCelsius = 92), setOf(TeaEditableField.BREW_TEMPERATURE))
+        }.isFailure)
+        assertEquals(95, database.teaDao().findById(teaId)?.brewTemperatureCelsius)
     }
 
     private suspend fun standard(kind: ReferenceKind, semanticKey: String? = null): ReferenceEntity =

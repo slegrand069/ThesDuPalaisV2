@@ -34,25 +34,26 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.UUID
 
 @Composable
-fun TeaDetailScreen(viewModel: TeaDetailViewModel, onBack: () -> Unit) {
+fun TeaDetailScreen(viewModel: TeaDetailViewModel, onBack: () -> Unit, onEdit: (UUID) -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    TeaDetailContent(state, onBack)
+    TeaDetailContent(state, onBack, onEdit)
 }
 
 @Composable
-internal fun TeaDetailContent(state: TeaDetailUiState, onBack: () -> Unit) {
+internal fun TeaDetailContent(state: TeaDetailUiState, onBack: () -> Unit, onEdit: (UUID) -> Unit = {}) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        DetailHeader(onBack)
+        DetailHeader(
+            onBack = onBack,
+            onEdit = { (state as? TeaDetailUiState.Content)?.let { onEdit(it.tea.id) } },
+            enabled = state is TeaDetailUiState.Content,
+        )
         when (state) {
             TeaDetailUiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.testTag("tea-detail-loading"))
@@ -71,7 +72,7 @@ internal fun TeaDetailContent(state: TeaDetailUiState, onBack: () -> Unit) {
 }
 
 @Composable
-private fun DetailHeader(onBack: () -> Unit) {
+private fun DetailHeader(onBack: () -> Unit, onEdit: () -> Unit, enabled: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth().height(56.dp).background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 12.dp),
@@ -96,9 +97,9 @@ private fun DetailHeader(onBack: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
         )
         Surface(
-            modifier = Modifier.width(76.dp).height(30.dp)
-                .semantics { disabled(); role = Role.Button }
-                .testTag("tea-detail-edit-disabled"),
+            onClick = onEdit,
+            enabled = enabled,
+            modifier = Modifier.width(76.dp).height(30.dp).testTag("tea-detail-edit"),
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {

@@ -72,6 +72,7 @@ import fr.thesdupalais.presentation.teaform.TeaFormViewModelFactory
 import java.util.UUID
 
 private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
+internal const val TEA_EDIT_ROUTE = "tea/{teaId}/edit"
 internal const val TEA_CREATE_ROUTE = "tea/create"
 private const val REFERENCE_LIST_ROUTE = "references/{kind}"
 private const val REFERENCE_CREATE_ROUTE = "references/{kind}/create"
@@ -152,6 +153,7 @@ fun AppNavigation(container: AppContainer) {
                 )
             }
             teaCreationDestination(navController, container.teaRepository)
+            teaEditingDestination(navController, container.teaRepository)
             composable(MainDestination.KNOWLEDGE.route) { KnowledgeScreen() }
             composable(MainDestination.SETTINGS.route) {
                 val settingsViewModel: SettingsViewModel = viewModel(
@@ -229,7 +231,11 @@ fun AppNavigation(container: AppContainer) {
                             container.database.tastingDao(),
                         ),
                     )
-                    TeaDetailScreen(detailViewModel, onBack)
+                    TeaDetailScreen(
+                        detailViewModel,
+                        onBack,
+                        onEdit = { id -> navController.navigate("tea/$id/edit") },
+                    )
                 }
             }
         }
@@ -253,6 +259,31 @@ internal fun NavGraphBuilder.teaCreationDestination(
                 }
             },
         )
+    }
+}
+
+internal fun NavGraphBuilder.teaEditingDestination(
+    navController: NavHostController,
+    repository: TeaRepository,
+) {
+    composable(
+        route = TEA_EDIT_ROUTE,
+        arguments = listOf(navArgument("teaId") { type = NavType.StringType }),
+    ) { entry ->
+        val teaId = entry.arguments?.getString("teaId")?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+        if (teaId == null) {
+            Text("Cette fiche n’est pas disponible.")
+        } else {
+            val editViewModel: TeaFormViewModel = viewModel(
+                key = "tea-form-edit-$teaId",
+                factory = TeaFormViewModelFactory(repository, teaId),
+            )
+            TeaFormScreen(
+                viewModel = editViewModel,
+                onCancel = { navController.popBackStack() },
+                onSaved = { navController.popBackStack() },
+            )
+        }
     }
 }
 

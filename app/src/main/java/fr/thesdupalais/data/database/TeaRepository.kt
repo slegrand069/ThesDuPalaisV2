@@ -29,11 +29,62 @@ data class NewTea(
     val infusionDurationSeconds: Int? = null,
 )
 
+data class TeaEditData(
+    val teaId: UUID,
+    val values: NewTea,
+    val references: Map<ReferenceKind, List<ReferenceValue>>,
+)
+
+enum class TeaEditableField {
+    NAME, CATEGORY, STATUS, CONTAINER, COUNTRIES, REGIONS, AROMAS, PROFILES, MOMENTS, BADGES,
+    TASTE_RATING, OLFACTORY_RATING, PERSONAL_NOTES, DESCRIPTION, TECHNICAL_INFORMATION,
+    BREW_TEMPERATURE, INFUSION_DURATION,
+}
+
 class TeaRepository(private val database: AppDatabase) {
     fun observeSelectableReferences(kind: ReferenceKind): Flow<List<ReferenceValue>> =
         database.referenceDao().observeSelectableByKind(kind.name).map { references ->
             references.map(ReferenceEntity::toDomain)
         }
+
+    suspend fun loadForEdit(teaId: UUID): TeaEditData? {
+        val detail = database.teaDao().findActiveDetailForEdit(teaId) ?: return null
+        val tea = detail.tea
+        val references = mapOf(
+            ReferenceKind.CATEGORY to listOf(detail.category),
+            ReferenceKind.STATUS to listOfNotNull(detail.status),
+            ReferenceKind.CONTAINER to listOfNotNull(detail.container),
+            ReferenceKind.COUNTRY to detail.countries,
+            ReferenceKind.REGION to detail.regions,
+            ReferenceKind.AROMA to detail.aromas,
+            ReferenceKind.AROMATIC_PROFILE to detail.aromaticProfiles,
+            ReferenceKind.MOMENT to detail.moments,
+            ReferenceKind.BADGE to detail.badges,
+        ).mapValues { (_, values) -> values.map(ReferenceEntity::toDomain) }
+        return TeaEditData(
+            teaId = tea.id,
+            values = NewTea(
+                name = tea.name,
+                categoryId = tea.categoryRefId,
+                statusId = tea.statusRefId,
+                containerId = tea.containerRefId,
+                countryIds = detail.countries.map { it.id },
+                regionIds = detail.regions.map { it.id },
+                aromaIds = detail.aromas.map { it.id },
+                aromaticProfileIds = detail.aromaticProfiles.map { it.id },
+                momentIds = detail.moments.map { it.id },
+                badgeIds = detail.badges.map { it.id },
+                tasteRating = tea.tasteRating,
+                olfactoryRating = tea.olfactoryRating,
+                personalNotes = tea.personalNotes,
+                description = tea.description,
+                technicalInformation = tea.technicalInformation,
+                brewTemperatureCelsius = tea.brewTemperatureCelsius,
+                infusionDurationSeconds = tea.infusionDurationSeconds,
+            ),
+            references = references,
+        )
+    }
 
     suspend fun create(tea: NewTea): UUID = try {
         createInTransaction(tea)
@@ -42,6 +93,139 @@ class TeaRepository(private val database: AppDatabase) {
             "Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été enregistrée.",
             error,
         )
+    }
+
+    suspend fun update(
+        teaId: UUID,
+        tea: NewTea,
+        changedFields: Set<TeaEditableField>,
+    ): Boolean = try {
+        database.withTransaction {
+            val dao = database.teaDao()
+            val old = dao.findActiveDetailForEdit(teaId)
+                ?: throw IllegalStateException("Ce thé n’est plus disponible pour modification.")
+            val oldTea = old.tea
+            val oldIds = mapOf(
+                ReferenceKind.CATEGORY to setOf(oldTea.categoryRefId),
+                ReferenceKind.STATUS to setOfNotNull(oldTea.statusRefId),
+                ReferenceKind.CONTAINER to setOfNotNull(oldTea.containerRefId),
+                ReferenceKind.COUNTRY to old.countries.map { it.id }.toSet(),
+                ReferenceKind.REGION to old.regions.map { it.id }.toSet(),
+                ReferenceKind.AROMA to old.aromas.map { it.id }.toSet(),
+                ReferenceKind.AROMATIC_PROFILE to old.aromaticProfiles.map { it.id }.toSet(),
+                ReferenceKind.MOMENT to old.moments.map { it.id }.toSet(),
+                ReferenceKind.BADGE to old.badges.map { it.id }.toSet(),
+            )
+
+            val name = if (TeaEditableField.NAME in changedFields) normalizeRequired(tea.name, "Saisissez le nom du thé.") else oldTea.name
+            val categoryId = if (TeaEditableField.CATEGORY in changedFields) requireNotNull(tea.categoryId) { "Choisissez une catégorie." } else oldTea.categoryRefId
+            val statusId = if (TeaEditableField.STATUS in changedFields) tea.statusId else oldTea.statusRefId
+            val containerId = if (TeaEditableField.CONTAINER in changedFields) tea.containerId else oldTea.containerRefId
+            val tasteRating = if (TeaEditableField.TASTE_RATING in changedFields) tea.tasteRating else oldTea.tasteRating
+            val olfactoryRating = if (TeaEditableField.OLFACTORY_RATING in changedFields) tea.olfactoryRating else oldTea.olfactoryRating
+            val personalNotes = if (TeaEditableField.PERSONAL_NOTES in changedFields) normalizeOptional(tea.personalNotes) else oldTea.personalNotes
+            val description = if (TeaEditableField.DESCRIPTION in changedFields) normalizeOptional(tea.description) else oldTea.description
+            val technicalInformation = if (TeaEditableField.TECHNICAL_INFORMATION in changedFields) normalizeOptional(tea.technicalInformation) else oldTea.technicalInformation
+            val temperature = if (TeaEditableField.BREW_TEMPERATURE in changedFields) tea.brewTemperatureCelsius else oldTea.brewTemperatureCelsius
+            val duration = if (TeaEditableField.INFUSION_DURATION in changedFields) tea.infusionDurationSeconds else oldTea.infusionDurationSeconds
+
+            requireRating(tasteRating, "La note gustative")
+            requireRating(olfactoryRating, "La note olfactive")
+            if (TeaEditableField.BREW_TEMPERATURE in changedFields && temperature != oldTea.brewTemperatureCelsius) {
+                require(temperature == null || (temperature in 60..100 && temperature % 5 == 0)) {
+                    "La température doit être comprise entre 60 et 100 °C, par pas de 5 °C."
+                }
+            }
+            require(duration == null || duration > 0) { "La durée d’infusion doit être supérieure à zéro seconde." }
+
+            suspend fun requireReference(id: UUID, kind: ReferenceKind): ReferenceEntity {
+                val reference = database.referenceDao().findById(id)
+                require(reference?.kind == kind.name && (reference.archivedAt == null || id in oldIds.getValue(kind))) {
+                    "Une valeur sélectionnée n’est plus disponible dans le référentiel ${kind.name.lowercase()}."
+                }
+                return reference
+            }
+
+            requireReference(categoryId, ReferenceKind.CATEGORY)
+            statusId?.let { requireReference(it, ReferenceKind.STATUS) }
+            containerId?.let { requireReference(it, ReferenceKind.CONTAINER) }
+
+            val countryIds = if (TeaEditableField.COUNTRIES in changedFields) tea.countryIds.distinct().toMutableSet()
+                else oldIds.getValue(ReferenceKind.COUNTRY).toMutableSet()
+            val regionIds = if (TeaEditableField.REGIONS in changedFields) tea.regionIds.distinct()
+                else oldIds.getValue(ReferenceKind.REGION).toList()
+            val regions = regionIds.map { requireReference(it, ReferenceKind.REGION) }
+            regions.forEach { region ->
+                val parentId = requireNotNull(region.parentCountryId) { "Une région doit être rattachée à un pays." }
+                requireReference(parentId, ReferenceKind.COUNTRY)
+                countryIds += parentId
+            }
+            val countries = countryIds.map { requireReference(it, ReferenceKind.COUNTRY) }
+            val countrySet = countries.map { it.id }.toSet()
+
+            suspend fun selectedIds(kind: ReferenceKind, selected: List<UUID>, changed: TeaEditableField): Set<UUID> {
+                val ids = if (changed in changedFields) selected.distinct() else oldIds.getValue(kind).toList()
+                ids.forEach { requireReference(it, kind) }
+                return ids.toSet()
+            }
+            val aromaIds = selectedIds(ReferenceKind.AROMA, tea.aromaIds, TeaEditableField.AROMAS)
+            val profileIds = selectedIds(ReferenceKind.AROMATIC_PROFILE, tea.aromaticProfileIds, TeaEditableField.PROFILES)
+            val momentIds = selectedIds(ReferenceKind.MOMENT, tea.momentIds, TeaEditableField.MOMENTS)
+            val badgeIds = selectedIds(ReferenceKind.BADGE, tea.badgeIds, TeaEditableField.BADGES)
+            val regionSet = regions.map { it.id }.toSet()
+
+            val scalarChanged = name != oldTea.name || categoryId != oldTea.categoryRefId || statusId != oldTea.statusRefId ||
+                containerId != oldTea.containerRefId || description != oldTea.description || technicalInformation != oldTea.technicalInformation ||
+                personalNotes != oldTea.personalNotes || tasteRating != oldTea.tasteRating || olfactoryRating != oldTea.olfactoryRating ||
+                temperature != oldTea.brewTemperatureCelsius || duration != oldTea.infusionDurationSeconds
+            val associationsChanged = countrySet != oldIds.getValue(ReferenceKind.COUNTRY) ||
+                regionSet != oldIds.getValue(ReferenceKind.REGION) || aromaIds != oldIds.getValue(ReferenceKind.AROMA) ||
+                profileIds != oldIds.getValue(ReferenceKind.AROMATIC_PROFILE) || momentIds != oldIds.getValue(ReferenceKind.MOMENT) ||
+                badgeIds != oldIds.getValue(ReferenceKind.BADGE)
+            if (!scalarChanged && !associationsChanged) return@withTransaction false
+
+            if (scalarChanged) {
+                check(dao.updateEditableFields(
+                    teaId = teaId,
+                    name = name,
+                    categoryRefId = categoryId,
+                    description = description,
+                    technicalInformation = technicalInformation,
+                    personalNotes = personalNotes,
+                    olfactoryRating = olfactoryRating,
+                    tasteRating = tasteRating,
+                    brewTemperatureCelsius = temperature,
+                    infusionDurationSeconds = duration,
+                    statusRefId = statusId,
+                    containerRefId = containerId,
+                ) == 1) { "Ce thé n’est plus disponible pour modification." }
+            }
+            if (countrySet != oldIds.getValue(ReferenceKind.COUNTRY) || regionSet != oldIds.getValue(ReferenceKind.REGION)) {
+                dao.deleteRegionsForTea(teaId)
+                dao.deleteCountriesForTea(teaId)
+                if (countrySet.isNotEmpty()) dao.insertCountries(countrySet.map { TeaCountryEntity(teaId, it) })
+                if (regionSet.isNotEmpty()) dao.insertRegions(regions.map { TeaRegionEntity(teaId, it.id, requireNotNull(it.parentCountryId)) })
+            }
+            if (aromaIds != oldIds.getValue(ReferenceKind.AROMA)) {
+                dao.deleteAromasForTea(teaId)
+                if (aromaIds.isNotEmpty()) dao.insertAromas(aromaIds.map { TeaAromaEntity(teaId, it) })
+            }
+            if (profileIds != oldIds.getValue(ReferenceKind.AROMATIC_PROFILE)) {
+                dao.deleteAromaticProfilesForTea(teaId)
+                if (profileIds.isNotEmpty()) dao.insertAromaticProfiles(profileIds.map { TeaAromaticProfileEntity(teaId, it) })
+            }
+            if (momentIds != oldIds.getValue(ReferenceKind.MOMENT)) {
+                dao.deleteMomentsForTea(teaId)
+                if (momentIds.isNotEmpty()) dao.insertMoments(momentIds.map { TeaMomentEntity(teaId, it) })
+            }
+            if (badgeIds != oldIds.getValue(ReferenceKind.BADGE)) {
+                dao.deleteBadgesForTea(teaId)
+                if (badgeIds.isNotEmpty()) dao.insertBadges(badgeIds.map { TeaBadgeEntity(teaId, it) })
+            }
+            true
+        }
+    } catch (error: SQLiteConstraintException) {
+        throw IllegalStateException("Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été modifiée.", error)
     }
 
     private suspend fun createInTransaction(tea: NewTea): UUID = database.withTransaction {

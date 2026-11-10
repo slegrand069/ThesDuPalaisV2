@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import fr.thesdupalais.data.database.NewTea
 import fr.thesdupalais.data.database.TeaRepository
+import fr.thesdupalais.data.database.TeaEditableField
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceValue
 import java.util.UUID
@@ -14,6 +15,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class TeaFormUiState(
+    val editTeaId: UUID? = null,
+    val isLoadingTea: Boolean = false,
+    val teaUnavailable: Boolean = false,
+    val initialDraft: TeaFormDraft? = null,
     val name: String = "",
     val categoryId: UUID? = null,
     val statusId: UUID? = null,
@@ -38,18 +43,65 @@ data class TeaFormUiState(
     val error: String? = null,
 ) {
     val isLoadingReferences: Boolean get() = loadedReferenceKinds.size < ReferenceKind.entries.size
-    val isDirty: Boolean get() =
-        name.isNotEmpty() || categoryId != null || statusId != null || containerId != null ||
+    val draft: TeaFormDraft get() = TeaFormDraft(
+        name, categoryId, statusId, containerId, countryIds, regionIds, aromaIds, profileIds, momentIds, badgeIds,
+        tasteRating, olfactoryRating, personalNotes, description, technicalInformation,
+        brewTemperatureCelsius, infusionDurationInput,
+    )
+    val isDirty: Boolean get() = if (editTeaId != null) {
+        initialDraft != null && draft != initialDraft
+    } else name.isNotEmpty() || categoryId != null || statusId != null || containerId != null ||
             countryIds.isNotEmpty() || regionIds.isNotEmpty() || aromaIds.isNotEmpty() || profileIds.isNotEmpty() ||
             momentIds.isNotEmpty() || badgeIds.isNotEmpty() || tasteRating != null || olfactoryRating != null ||
             personalNotes.isNotEmpty() || description.isNotEmpty() || technicalInformation.isNotEmpty() ||
             brewTemperatureCelsius != null || infusionDurationInput.isNotEmpty()
 }
 
-class TeaFormViewModel(private val repository: TeaRepository) : ViewModel() {
-    private val _uiState = MutableStateFlow(TeaFormUiState())
+data class TeaFormDraft(
+    val name: String,
+    val categoryId: UUID?,
+    val statusId: UUID?,
+    val containerId: UUID?,
+    val countryIds: Set<UUID>,
+    val regionIds: Set<UUID>,
+    val aromaIds: Set<UUID>,
+    val profileIds: Set<UUID>,
+    val momentIds: Set<UUID>,
+    val badgeIds: Set<UUID>,
+    val tasteRating: Double?,
+    val olfactoryRating: Double?,
+    val personalNotes: String,
+    val description: String,
+    val technicalInformation: String,
+    val brewTemperatureCelsius: Int?,
+    val infusionDurationInput: String,
+) {
+    fun changedFieldsSince(initial: TeaFormDraft): Set<TeaEditableField> = buildSet {
+        if (name != initial.name) add(TeaEditableField.NAME)
+        if (categoryId != initial.categoryId) add(TeaEditableField.CATEGORY)
+        if (statusId != initial.statusId) add(TeaEditableField.STATUS)
+        if (containerId != initial.containerId) add(TeaEditableField.CONTAINER)
+        if (countryIds != initial.countryIds) add(TeaEditableField.COUNTRIES)
+        if (regionIds != initial.regionIds) add(TeaEditableField.REGIONS)
+        if (aromaIds != initial.aromaIds) add(TeaEditableField.AROMAS)
+        if (profileIds != initial.profileIds) add(TeaEditableField.PROFILES)
+        if (momentIds != initial.momentIds) add(TeaEditableField.MOMENTS)
+        if (badgeIds != initial.badgeIds) add(TeaEditableField.BADGES)
+        if (tasteRating != initial.tasteRating) add(TeaEditableField.TASTE_RATING)
+        if (olfactoryRating != initial.olfactoryRating) add(TeaEditableField.OLFACTORY_RATING)
+        if (personalNotes != initial.personalNotes) add(TeaEditableField.PERSONAL_NOTES)
+        if (description != initial.description) add(TeaEditableField.DESCRIPTION)
+        if (technicalInformation != initial.technicalInformation) add(TeaEditableField.TECHNICAL_INFORMATION)
+        if (brewTemperatureCelsius != initial.brewTemperatureCelsius) add(TeaEditableField.BREW_TEMPERATURE)
+        if (infusionDurationInput != initial.infusionDurationInput) add(TeaEditableField.INFUSION_DURATION)
+    }
+}
+
+class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? = null) : ViewModel() {
+    private val _uiState = MutableStateFlow(TeaFormUiState(editTeaId = editTeaId, isLoadingTea = editTeaId != null))
     val uiState = _uiState.asStateFlow()
     private var savedTeaId: UUID? = null
+    private var retainedArchivedReferences: Map<ReferenceKind, List<ReferenceValue>> = emptyMap()
 
     init {
         ReferenceKind.entries.forEach { kind ->
@@ -57,12 +109,75 @@ class TeaFormViewModel(private val repository: TeaRepository) : ViewModel() {
                 repository.observeSelectableReferences(kind).collect { values ->
                     _uiState.update {
                         it.copy(
-                            references = it.references + (kind to values),
+                            references = it.references + (kind to (values + retainedArchivedReferences[kind].orEmpty()).distinctBy { value -> value.id }),
                             loadedReferenceKinds = it.loadedReferenceKinds + kind,
                         )
                     }
                 }
             }
+        }
+        editTeaId?.let(::loadForEdit)
+    }
+
+    private fun loadForEdit(teaId: UUID) {
+        viewModelScope.launch {
+            runCatching { repository.loadForEdit(teaId) }
+                .onFailure { error ->
+                    _uiState.update { it.copy(isLoadingTea = false, teaUnavailable = true, error = error.message ?: "Impossible de charger ce thé.") }
+                }
+                .onSuccess { data ->
+                    if (data == null) {
+                        _uiState.update { it.copy(isLoadingTea = false, teaUnavailable = true, error = "Ce thé n’est plus disponible pour modification.") }
+                    } else {
+                        val value = data.values
+                        retainedArchivedReferences = data.references.mapValues { (_, references) -> references.filter { it.archivedAt != null } }
+                        val draft = TeaFormDraft(
+                            name = value.name,
+                            categoryId = value.categoryId,
+                            statusId = value.statusId,
+                            containerId = value.containerId,
+                            countryIds = value.countryIds.toSet(),
+                            regionIds = value.regionIds.toSet(),
+                            aromaIds = value.aromaIds.toSet(),
+                            profileIds = value.aromaticProfileIds.toSet(),
+                            momentIds = value.momentIds.toSet(),
+                            badgeIds = value.badgeIds.toSet(),
+                            tasteRating = value.tasteRating,
+                            olfactoryRating = value.olfactoryRating,
+                            personalNotes = value.personalNotes.orEmpty(),
+                            description = value.description.orEmpty(),
+                            technicalInformation = value.technicalInformation.orEmpty(),
+                            brewTemperatureCelsius = value.brewTemperatureCelsius,
+                            infusionDurationInput = value.infusionDurationSeconds?.toString().orEmpty(),
+                        )
+                        _uiState.update { state ->
+                            state.copy(
+                                name = draft.name,
+                                categoryId = draft.categoryId,
+                                statusId = draft.statusId,
+                                containerId = draft.containerId,
+                                countryIds = draft.countryIds,
+                                regionIds = draft.regionIds,
+                                aromaIds = draft.aromaIds,
+                                profileIds = draft.profileIds,
+                                momentIds = draft.momentIds,
+                                badgeIds = draft.badgeIds,
+                                tasteRating = draft.tasteRating,
+                                olfactoryRating = draft.olfactoryRating,
+                                personalNotes = draft.personalNotes,
+                                description = draft.description,
+                                technicalInformation = draft.technicalInformation,
+                                brewTemperatureCelsius = draft.brewTemperatureCelsius,
+                                infusionDurationInput = draft.infusionDurationInput,
+                                references = state.references.mapValues { (kind, options) ->
+                                    (options + retainedArchivedReferences[kind].orEmpty()).distinctBy { it.id }
+                                },
+                                initialDraft = draft,
+                                isLoadingTea = false,
+                            )
+                        }
+                    }
+                }
         }
     }
 
@@ -107,8 +222,9 @@ class TeaFormViewModel(private val repository: TeaRepository) : ViewModel() {
     }
 
     fun save(onSaved: (UUID) -> Unit) {
-        if (_uiState.value.isSaving || _uiState.value.isSaved || _uiState.value.isLoadingReferences || savedTeaId != null) return
+        if (_uiState.value.isSaving || _uiState.value.isSaved || _uiState.value.isLoadingReferences || _uiState.value.isLoadingTea || savedTeaId != null) return
         val current = _uiState.value
+        if (current.teaUnavailable) return
         if (current.name.isBlank()) {
             _uiState.update { it.copy(error = "Saisissez le nom du thé.") }
             return
@@ -122,11 +238,17 @@ class TeaFormViewModel(private val repository: TeaRepository) : ViewModel() {
             _uiState.update { it.copy(error = "La durée d’infusion doit être un nombre de secondes supérieur à zéro.") }
             return
         }
+        val initial = current.initialDraft
+        if (current.editTeaId != null && initial != null && current.draft == initial) {
+            savedTeaId = current.editTeaId
+            _uiState.update { it.copy(isSaved = true, error = null) }
+            onSaved(current.editTeaId)
+            return
+        }
         _uiState.update { it.copy(isSaving = true, error = null) }
         viewModelScope.launch {
             runCatching {
-                repository.create(
-                    NewTea(
+                val values = NewTea(
                         name = current.name,
                         categoryId = current.categoryId,
                         statusId = current.statusId,
@@ -144,8 +266,12 @@ class TeaFormViewModel(private val repository: TeaRepository) : ViewModel() {
                         technicalInformation = current.technicalInformation,
                         brewTemperatureCelsius = current.brewTemperatureCelsius,
                         infusionDurationSeconds = duration,
-                    ),
-                )
+                    )
+                if (current.editTeaId == null) repository.create(values)
+                else {
+                    repository.update(current.editTeaId, values, current.draft.changedFieldsSince(requireNotNull(initial)))
+                    current.editTeaId
+                }
             }.onSuccess { id ->
                 savedTeaId = id
                 _uiState.update { it.copy(isSaving = false, isSaved = true) }
@@ -165,10 +291,13 @@ class TeaFormViewModel(private val repository: TeaRepository) : ViewModel() {
         if (selected) this + id else this - id
 }
 
-class TeaFormViewModelFactory(private val repository: TeaRepository) : ViewModelProvider.Factory {
+class TeaFormViewModelFactory(
+    private val repository: TeaRepository,
+    private val editTeaId: UUID? = null,
+) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(TeaFormViewModel::class.java.isAssignableFrom(modelClass))
-        return TeaFormViewModel(repository) as T
+        return TeaFormViewModel(repository, editTeaId) as T
     }
 }

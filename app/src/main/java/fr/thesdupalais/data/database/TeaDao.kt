@@ -31,11 +31,56 @@ interface TeaDao {
     @Query("SELECT * FROM teas WHERE id = :teaId AND archivedAtEpochMillis IS NULL LIMIT 1")
     fun observeActiveDetail(teaId: UUID): Flow<TeaWithDetailData?>
 
+    @Transaction
+    @Query("SELECT * FROM teas WHERE id = :teaId AND archivedAtEpochMillis IS NULL LIMIT 1")
+    suspend fun findActiveDetailForEdit(teaId: UUID): TeaWithDetailData?
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(tea: TeaEntity)
 
     @Update
     suspend fun update(tea: TeaEntity)
+
+    @Query("""
+        UPDATE teas SET name = :name, categoryRefId = :categoryRefId, description = :description,
+            technicalInformation = :technicalInformation, personalNotes = :personalNotes,
+            olfactoryRating = :olfactoryRating, tasteRating = :tasteRating,
+            brewTemperatureCelsius = :brewTemperatureCelsius, infusionDurationSeconds = :infusionDurationSeconds,
+            statusRefId = :statusRefId, containerRefId = :containerRefId
+        WHERE id = :teaId AND archivedAtEpochMillis IS NULL
+    """)
+    suspend fun updateEditableFields(
+        teaId: UUID,
+        name: String,
+        categoryRefId: UUID,
+        description: String?,
+        technicalInformation: String?,
+        personalNotes: String?,
+        olfactoryRating: Double?,
+        tasteRating: Double?,
+        brewTemperatureCelsius: Int?,
+        infusionDurationSeconds: Int?,
+        statusRefId: UUID?,
+        containerRefId: UUID?,
+    ): Int
+
+    @Query("DELETE FROM tea_regions WHERE teaId = :teaId")
+    suspend fun deleteRegionsForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_countries WHERE teaId = :teaId")
+    suspend fun deleteCountriesForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_aromas WHERE teaId = :teaId")
+    suspend fun deleteAromasForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_aromatic_profiles WHERE teaId = :teaId")
+    suspend fun deleteAromaticProfilesForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_moments WHERE teaId = :teaId")
+    suspend fun deleteMomentsForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_badges WHERE teaId = :teaId")
+    suspend fun deleteBadgesForTea(teaId: UUID)
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertCountries(values: List<TeaCountryEntity>)

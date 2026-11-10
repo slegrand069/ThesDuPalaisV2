@@ -1,6 +1,7 @@
 package fr.thesdupalais.presentation.teaform
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -103,6 +104,69 @@ class TeaFormScreenTest {
         }
         composeRule.waitUntil(5_000) { runBlocking { database.teaDao().count() == 1 } }
         assertEquals(1, runBlocking { database.teaDao().count() })
+    }
+
+    @Test fun editFormPrefillsImportedTeaAndUnchangedSavePerformsNoWrite() = runBlocking {
+        val category = requireNotNull(database.referenceDao().findBySemanticKey("CATEGORY", "GREEN"))
+        val teaId = UUID.randomUUID()
+        database.teaDao().insert(
+            fr.thesdupalais.data.database.TeaEntity(
+                id = teaId, legacyId = 2L, name = "Imported tea", categoryRefId = category.id,
+                description = "Imported description", technicalInformation = "Imported technical data",
+                personalNotes = null, olfactoryRating = 7.25, tasteRating = 8.35,
+                brewTemperatureCelsius = 82, infusionDurationSeconds = 130,
+                statusRefId = null, containerRefId = null, stockMilliGrams = 12_500L,
+                archivedAtEpochMillis = null,
+            ),
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_unchanged_edit BEFORE UPDATE ON teas BEGIN SELECT RAISE(ABORT, 'unchanged edit wrote'); END",
+        )
+        val editViewModel = TeaFormViewModel(TeaRepository(database), teaId)
+        val savedId = AtomicReference<UUID?>(null)
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaFormScreen(editViewModel, onCancel = {}, onSaved = { savedId.set(it) })
+            }
+        }
+        composeRule.waitUntil(5_000) {
+            editViewModel.uiState.value.initialDraft != null &&
+                composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("tea-form-category-${greenCategoryId()}")).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.runOnIdle { assertEquals("Imported tea", editViewModel.uiState.value.name) }
+        composeRule.onNodeWithTag("tea-form-temperature-value").assertTextEquals("82 °C · valeur historique")
+        composeRule.onNodeWithTag("tea-form-save").performClick()
+        composeRule.waitUntil(2_000) { savedId.get() == teaId }
+
+        val unchanged = requireNotNull(database.teaDao().findById(teaId))
+        assertEquals("Imported tea", unchanged.name)
+        assertEquals(2L, unchanged.legacyId)
+        assertEquals(82, unchanged.brewTemperatureCelsius)
+        assertEquals(12_500L, unchanged.stockMilliGrams)
+    }
+
+    @Test fun editCancelAndConfirmedAbandonLeaveTheStoredTeaUntouched() = runBlocking {
+        val category = requireNotNull(database.referenceDao().findBySemanticKey("CATEGORY", "GREEN"))
+        val teaId = TeaRepository(database).create(
+            fr.thesdupalais.data.database.NewTea("Original name", category.id, personalNotes = "Original notes"),
+        )
+        val editViewModel = TeaFormViewModel(TeaRepository(database), teaId)
+        var cancelled = false
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaFormScreen(editViewModel, onCancel = { cancelled = true }, onSaved = {})
+            }
+        }
+        composeRule.waitUntil(5_000) { editViewModel.uiState.value.initialDraft != null }
+        composeRule.onNodeWithTag("tea-form-name").performTextInput(" changed")
+        composeRule.onNodeWithTag("tea-form-cancel").performClick()
+        composeRule.onNodeWithTag("tea-form-abandon-continue").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("tea-form-back").performClick()
+        composeRule.onNodeWithTag("tea-form-abandon-confirm").assertIsDisplayed().performClick()
+        composeRule.waitUntil(2_000) { cancelled }
+        val unchanged = requireNotNull(database.teaDao().findById(teaId))
+        assertEquals("Original name", unchanged.name)
+        assertEquals("Original notes", unchanged.personalNotes)
     }
 
     private fun greenCategoryId(): UUID = StandardReferenceSeeds.categories.single { it.semanticKey == "GREEN" }.id
