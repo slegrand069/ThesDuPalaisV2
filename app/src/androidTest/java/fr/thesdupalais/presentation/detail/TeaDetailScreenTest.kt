@@ -1,6 +1,5 @@
 package fr.thesdupalais.presentation.detail
 
-import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -40,7 +39,8 @@ class TeaDetailScreenTest {
         }
 
         composeRule.onNodeWithText("Thé vert", substring = true).assertIsDisplayed()
-        assertTextExists("Statut : Dans ma collection · Contenant : Boîte")
+        composeRule.onNodeWithText("Statut : Dans ma collection", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Contenant : Boîte", substring = true).assertIsDisplayed()
         assertTextExists("8,5 / 10")
         assertTextExists("9 / 10")
         assertTextExists("Notes personnelles")

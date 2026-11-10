@@ -105,6 +105,10 @@ data class TeaWithCatalogData(
     @Embedded val tea: TeaEntity,
     @Relation(parentColumn = "categoryRefId", entityColumn = "id")
     val category: ReferenceEntity,
+    @Relation(parentColumn = "statusRefId", entityColumn = "id")
+    val status: ReferenceEntity?,
+    @Relation(parentColumn = "containerRefId", entityColumn = "id")
+    val container: ReferenceEntity?,
     @Relation(
         parentColumn = "id",
         entityColumn = "id",
@@ -117,6 +121,30 @@ data class TeaWithCatalogData(
         associateBy = Junction(value = TeaRegionEntity::class, parentColumn = "teaId", entityColumn = "regionRefId"),
     )
     val regions: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaAromaEntity::class, parentColumn = "teaId", entityColumn = "aromaRefId"),
+    )
+    val aromas: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaAromaticProfileEntity::class, parentColumn = "teaId", entityColumn = "profileRefId"),
+    )
+    val aromaticProfiles: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaMomentEntity::class, parentColumn = "teaId", entityColumn = "momentRefId"),
+    )
+    val moments: List<ReferenceEntity>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(value = TeaBadgeEntity::class, parentColumn = "teaId", entityColumn = "badgeRefId"),
+    )
+    val badges: List<ReferenceEntity>,
 )
 
 data class TeaWithDetailData(

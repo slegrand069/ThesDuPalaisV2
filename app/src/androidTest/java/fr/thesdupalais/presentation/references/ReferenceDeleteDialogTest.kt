@@ -50,7 +50,8 @@ class ReferenceDeleteDialogTest {
         }
 
         composeRule.onNodeWithText("Suppression impossible").assertIsDisplayed()
-        composeRule.onNodeWithText("« Valeur fictive » est associée à 2 thés.").assertIsDisplayed()
+        composeRule.onNodeWithText("« Valeur fictive » est associée à 2 thés.", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("ne peut pas être supprimée tant qu’elle est utilisée.", substring = true).assertIsDisplayed()
         composeRule.onNodeWithTag("reference-delete-understood").performClick()
     }
 

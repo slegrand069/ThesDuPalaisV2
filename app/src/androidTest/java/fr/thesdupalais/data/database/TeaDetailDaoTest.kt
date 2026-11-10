@@ -40,7 +40,7 @@ class TeaDetailDaoTest {
         val region = addReference(ReferenceKind.REGION, "Shizuoka", country.id)
         val aroma = addReference(ReferenceKind.AROMA, "Herbe coupée")
         val profile = addReference(ReferenceKind.AROMATIC_PROFILE, "Végétal")
-        val moment = addReference(ReferenceKind.MOMENT, "Matin")
+        val moment = addReference(ReferenceKind.MOMENT, "Moment fictif détail")
         val badge = addReference(ReferenceKind.BADGE, "Bio")
         val tea = TeaEntity(
             id = UUID.randomUUID(), legacyId = null, name = "Thé test détail", categoryRefId = category.id,
@@ -69,7 +69,7 @@ class TeaDetailDaoTest {
         assertEquals(listOf("Shizuoka"), details.regions.map { it.label })
         assertEquals(listOf("Herbe coupée"), details.aromas.map { it.label })
         assertEquals(listOf("Végétal"), details.aromaticProfiles.map { it.label })
-        assertEquals(listOf("Matin"), details.moments.map { it.label })
+        assertEquals(listOf("Moment fictif détail"), details.moments.map { it.label })
         assertEquals(listOf("Bio"), details.badges.map { it.label })
         assertEquals(8.5, details.tea.tasteRating!!, 0.0)
         assertEquals(9.0, details.tea.olfactoryRating!!, 0.0)
@@ -102,8 +102,10 @@ class TeaDetailDaoTest {
             archivedAt = null,
         )
         val entity = ReferenceEntity.fromDomain(value)
-        database.referenceDao().insertIfAbsent(entity)
-        return entity
+        val insertedRowId = database.referenceDao().insertIfAbsent(entity)
+        return if (insertedRowId == -1L) {
+            requireNotNull(database.referenceDao().findByNormalizedLabel(kind.name, value.normalizedLabel, entity.scopeKey))
+        } else entity
     }
 
     private fun tasting(teaId: UUID, occurredAt: Long) = TastingEntity(

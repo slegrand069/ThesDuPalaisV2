@@ -87,6 +87,38 @@ class TeaCatalogDaoTest {
         collector.join()
     }
 
+    @Test fun catalogueProjectionIncludesStatusAromasAndAromaticProfilesForSearch() = runBlocking {
+        StandardReferenceSeeder(database).seed()
+        val category = StandardReferenceSeeds.categories.single { it.semanticKey == "GREEN" }
+        val status = StandardReferenceSeeds.statuses.first()
+        val country = addReference(ReferenceKind.COUNTRY, "Japon")
+        val region = addReference(ReferenceKind.REGION, "Uji", country.id)
+        val aroma = addReference(ReferenceKind.AROMA, "Jasmin")
+        val profile = addReference(ReferenceKind.AROMATIC_PROFILE, "Floral")
+        val container = addReference(ReferenceKind.CONTAINER, "Boîte personnalisée")
+        val moment = addReference(ReferenceKind.MOMENT, "Après-midi personnalisé")
+        val badge = addReference(ReferenceKind.BADGE, "Grand cru personnalisé")
+        val tea = tea("Sencha au jasmin", category.id).copy(statusRefId = status.id, containerRefId = container.id)
+        database.teaDao().insert(tea)
+        database.teaDao().insertCountries(listOf(TeaCountryEntity(tea.id, country.id)))
+        database.teaDao().insertRegions(listOf(TeaRegionEntity(tea.id, region.id, country.id)))
+        database.teaDao().insertAromas(listOf(TeaAromaEntity(tea.id, aroma.id)))
+        database.teaDao().insertAromaticProfiles(listOf(TeaAromaticProfileEntity(tea.id, profile.id)))
+        database.teaDao().insertMoments(listOf(TeaMomentEntity(tea.id, moment.id)))
+        database.teaDao().insertBadges(listOf(TeaBadgeEntity(tea.id, badge.id)))
+
+        val row = database.teaDao().observeActiveCatalog().first().single()
+
+        assertEquals(status.id, row.status?.id)
+        assertEquals(container.id, row.container?.id)
+        assertEquals(listOf(aroma.id), row.aromas.map { it.id })
+        assertEquals(listOf(profile.id), row.aromaticProfiles.map { it.id })
+        assertEquals(listOf(moment.id), row.moments.map { it.id })
+        assertEquals(listOf(badge.id), row.badges.map { it.id })
+        assertEquals(listOf(country.id), row.countries.map { it.id })
+        assertEquals(listOf(region.id), row.regions.map { it.id })
+    }
+
     private suspend fun addReference(
         kind: ReferenceKind,
         label: String,
