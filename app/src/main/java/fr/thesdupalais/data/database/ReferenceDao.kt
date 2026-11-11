@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ReferenceDao {
+    @Query("SELECT * FROM reference_values ORDER BY kind, id")
+    suspend fun allForBackup(): List<ReferenceEntity>
     @Query("SELECT * FROM reference_values WHERE id = :id LIMIT 1")
     suspend fun findById(id: java.util.UUID): ReferenceEntity?
 

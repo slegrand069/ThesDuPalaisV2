@@ -58,6 +58,7 @@ import fr.thesdupalais.presentation.references.referenceFamilies
 import fr.thesdupalais.presentation.settings.SettingsViewModel
 import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
 import fr.thesdupalais.presentation.settings.SettingsPreferencesSection
+import fr.thesdupalais.presentation.settings.BackupExportSection
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModelFactory
@@ -159,7 +160,7 @@ fun AppNavigation(container: AppContainer) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModelFactory(container.preferences),
                 )
-                SettingsScreen(settingsViewModel) { kind ->
+                SettingsScreen(settingsViewModel, container) { kind ->
                     navController.navigate("references/${kind.name}")
                 }
             }
@@ -343,7 +344,7 @@ private fun KnowledgeScreen() {
 }
 
 @Composable
-private fun SettingsScreen(viewModel: SettingsViewModel, onOpenReference: (ReferenceKind) -> Unit) {
+private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     val preferencesLoaded by viewModel.preferencesLoaded.collectAsStateWithLifecycle()
     Column(
@@ -377,6 +378,10 @@ private fun SettingsScreen(viewModel: SettingsViewModel, onOpenReference: (Refer
             onUpdateGramsPerCupMilli = viewModel::updateGramsPerCupMilli,
             onUpdateLowStockThresholdMilli = viewModel::updateLowStockThresholdMilli,
         )
+        Spacer(Modifier.height(24.dp))
+        Text("Import / Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        BackupExportSection(container.backupArchiveExporter)
     }
 }
 

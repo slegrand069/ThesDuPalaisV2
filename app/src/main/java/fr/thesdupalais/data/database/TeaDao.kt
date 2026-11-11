@@ -14,6 +14,26 @@ import java.util.UUID
 
 @Dao
 interface TeaDao {
+    @Query("SELECT * FROM teas ORDER BY id")
+    suspend fun allForBackup(): List<TeaEntity>
+
+    @Query("SELECT * FROM tea_countries ORDER BY teaId, countryRefId")
+    suspend fun allCountriesForBackup(): List<TeaCountryEntity>
+
+    @Query("SELECT * FROM tea_regions ORDER BY teaId, regionRefId")
+    suspend fun allRegionsForBackup(): List<TeaRegionEntity>
+
+    @Query("SELECT * FROM tea_aromas ORDER BY teaId, aromaRefId")
+    suspend fun allAromasForBackup(): List<TeaAromaEntity>
+
+    @Query("SELECT * FROM tea_aromatic_profiles ORDER BY teaId, profileRefId")
+    suspend fun allAromaticProfilesForBackup(): List<TeaAromaticProfileEntity>
+
+    @Query("SELECT * FROM tea_moments ORDER BY teaId, momentRefId")
+    suspend fun allMomentsForBackup(): List<TeaMomentEntity>
+
+    @Query("SELECT * FROM tea_badges ORDER BY teaId, badgeRefId")
+    suspend fun allBadgesForBackup(): List<TeaBadgeEntity>
     @Query("SELECT COUNT(*) FROM teas")
     suspend fun count(): Int
 
@@ -195,6 +215,8 @@ data class TeaWithDetailData(
 
 @Dao
 interface TastingDao {
+    @Query("SELECT * FROM tastings ORDER BY id")
+    suspend fun allForBackup(): List<TastingEntity>
     @Query("SELECT COUNT(*) FROM tastings")
     suspend fun count(): Int
 
@@ -214,6 +236,8 @@ interface TastingDao {
 
 @Dao
 interface StockMovementDao {
+    @Query("SELECT * FROM stock_movements ORDER BY id")
+    suspend fun allForBackup(): List<StockMovementEntity>
     @Query("SELECT COUNT(*) FROM stock_movements")
     suspend fun count(): Int
 
