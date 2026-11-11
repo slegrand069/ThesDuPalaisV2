@@ -7,6 +7,7 @@ import fr.thesdupalais.data.database.MIGRATION_1_2
 import fr.thesdupalais.data.database.MIGRATION_2_3
 import fr.thesdupalais.data.importer.CollectionImporter
 import fr.thesdupalais.data.backup.BackupArchiveExporter
+import fr.thesdupalais.data.backup.BackupArchivePreviewReader
 import fr.thesdupalais.data.database.RoomReferenceRepository
 import fr.thesdupalais.data.database.StandardReferenceSeeder
 import fr.thesdupalais.data.database.TeaRepository
@@ -26,6 +27,7 @@ class AppContainer(context: Context) : FirstRunOperations {
     val teaRepository = TeaRepository(database)
     val collectionImporter = CollectionImporter(database, preferences)
     val backupArchiveExporter = BackupArchiveExporter(database, preferences, context.applicationContext.contentResolver)
+    val backupArchivePreviewReader = BackupArchivePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
 
     override suspend fun initialize() {
         StandardReferenceSeeder(database).seed()

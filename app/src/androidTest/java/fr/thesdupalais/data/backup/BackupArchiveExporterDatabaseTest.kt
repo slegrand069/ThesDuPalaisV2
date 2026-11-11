@@ -42,4 +42,22 @@ class BackupArchiveExporterDatabaseTest {
         assertEquals(teasBefore, database.teaDao().allForBackup())
         assertEquals(preferencesBefore, preferences.preferences.first())
     }
+
+    @Test fun previewAgainstLocalSnapshotDoesNotModifyRoomOrPreferences() = runBlocking {
+        val referencesBefore = database.referenceDao().allForBackup()
+        val teasBefore = database.teaDao().allForBackup()
+        val preferences = LocalPreferencesRepository(context)
+        val preferencesBefore = preferences.preferences.first()
+        val exporter = BackupArchiveExporter(database, preferences, context.contentResolver)
+        val localBytes = exporter.createArchive(setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val input = BackupArchiveValidator.validate(localBytes)
+        val local = BackupArchiveValidator.validate(localBytes)
+
+        val preview = BackupArchivePreviewAnalyzer.analyze(localBytes, input, local, setOf("teas", "configuration"))
+
+        assertEquals(setOf("teas", "configuration"), preview.selectedSets)
+        assertEquals(referencesBefore, database.referenceDao().allForBackup())
+        assertEquals(teasBefore, database.teaDao().allForBackup())
+        assertEquals(preferencesBefore, preferences.preferences.first())
+    }
 }
