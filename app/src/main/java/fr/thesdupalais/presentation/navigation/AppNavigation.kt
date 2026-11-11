@@ -60,6 +60,7 @@ import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
 import fr.thesdupalais.presentation.settings.SettingsPreferencesSection
 import fr.thesdupalais.presentation.settings.BackupExportSection
 import fr.thesdupalais.presentation.settings.BackupPreviewSection
+import fr.thesdupalais.presentation.settings.BackupMergePreviewSection
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModelFactory
@@ -385,6 +386,8 @@ private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer
         BackupExportSection(container.backupArchiveExporter)
         Spacer(Modifier.height(10.dp))
         BackupPreviewSection(container.backupArchivePreviewReader)
+        Spacer(Modifier.height(10.dp))
+        BackupMergePreviewSection(container.backupArchiveMergePreviewReader)
     }
 }
 
