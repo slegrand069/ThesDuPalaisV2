@@ -145,6 +145,34 @@ class BackupTargetStateBuilderTest {
         assertTrue(first.applicable)
     }
 
+    @Test fun preparedTargetIsValidatedAndRejectsOrphanedRelations() {
+        val bytes = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val result = BackupTargetStateBuilder.build(request(bytes, bytes, TargetOperation.REPLACE, setOf("teas", "configuration"), true))
+        assertTrue(result.applicable)
+        assertTrue(BackupTargetStateBuilder.validatePreparedState(requireNotNull(result.state)).isEmpty())
+
+        val brokenPayloads = result.state!!.payloads.toMutableMap()
+        val teas = JSONObject(brokenPayloads.getValue("data/teas.json"))
+        val rows = teas.getJSONArray("teas")
+        rows.getJSONObject(0).put("categoryId", "123e4567-e89b-12d3-a456-426614174099")
+        brokenPayloads["data/teas.json"] = teas.toString()
+        val errors = BackupTargetStateBuilder.validatePreparedState(result.state.copy(payloads = brokenPayloads))
+        assertTrue(errors.toString(), errors.isNotEmpty())
+    }
+
+    @Test fun localFingerprintIncludesImportSupersededDecision() {
+        val bytes = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val record = TargetImportRecord("123e4567-e89b-12d3-a456-426614174140", "a".repeat(64), 1)
+        val active = BackupTargetStateBuilder.build(BackupTargetRequest(
+            bytes, bytes, TargetOperation.REPLACE, setOf("teas"), replacementConfirmed = true, importHistory = listOf(record),
+        ))
+        val superseded = BackupTargetStateBuilder.build(BackupTargetRequest(
+            bytes, bytes, TargetOperation.REPLACE, setOf("teas"), replacementConfirmed = true, importHistory = listOf(record.copy(isSuperseded = true)),
+        ))
+        assertTrue(active.applicable && superseded.applicable)
+        assertTrue(active.fingerprints.localSnapshotSha256 != superseded.fingerprints.localSnapshotSha256)
+    }
+
     @Test fun fingerprintsCoverPreferencesPhotosAndConfirmationDecisions() {
         val localA = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
         val localB = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION), UserPreferences(7100, 25000))

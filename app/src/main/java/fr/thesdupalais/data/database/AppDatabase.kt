@@ -20,7 +20,7 @@ import androidx.room.TypeConverters
         ImportedDatasetEntity::class,
         BackupOperationMarkerEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)

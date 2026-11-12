@@ -16,7 +16,7 @@ object BackupOperationStateMachine {
     private val transitions = mapOf(
         BackupOperationState.PREPARING to setOf(BackupOperationState.PREPARED, BackupOperationState.ABORTED, BackupOperationState.RECOVERY_REQUIRED),
         BackupOperationState.PREPARED to setOf(BackupOperationState.ROOM_APPLYING, BackupOperationState.ABORTED, BackupOperationState.RECOVERY_REQUIRED),
-        BackupOperationState.ROOM_APPLYING to setOf(BackupOperationState.ROOM_COMMITTED, BackupOperationState.RECOVERY_REQUIRED),
+        BackupOperationState.ROOM_APPLYING to setOf(BackupOperationState.ROOM_COMMITTED, BackupOperationState.ABORTED, BackupOperationState.RECOVERY_REQUIRED),
         BackupOperationState.ROOM_COMMITTED to setOf(BackupOperationState.FINALIZING, BackupOperationState.RECOVERY_REQUIRED),
         BackupOperationState.FINALIZING to setOf(BackupOperationState.COMPLETE, BackupOperationState.RECOVERY_REQUIRED),
         BackupOperationState.RECOVERY_REQUIRED to emptySet(),

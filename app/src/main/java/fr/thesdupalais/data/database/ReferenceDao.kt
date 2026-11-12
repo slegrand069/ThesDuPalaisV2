@@ -5,6 +5,7 @@ import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -19,6 +20,9 @@ interface ReferenceDao {
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(reference: ReferenceEntity)
+
+    @Update
+    suspend fun update(reference: ReferenceEntity)
 
     @Query("UPDATE reference_values SET label = :label, normalizedLabel = :normalizedLabel WHERE id = :id")
     suspend fun rename(id: java.util.UUID, label: String, normalizedLabel: String): Int

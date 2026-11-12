@@ -6,6 +6,7 @@ import fr.thesdupalais.data.database.AppDatabase
 import fr.thesdupalais.data.database.MIGRATION_1_2
 import fr.thesdupalais.data.database.MIGRATION_2_3
 import fr.thesdupalais.data.database.MIGRATION_3_4
+import fr.thesdupalais.data.database.MIGRATION_4_5
 import fr.thesdupalais.data.importer.CollectionImporter
 import fr.thesdupalais.data.backup.BackupArchiveExporter
 import fr.thesdupalais.data.backup.BackupArchivePreviewReader
@@ -19,6 +20,7 @@ import fr.thesdupalais.FirstRunOperations
 import fr.thesdupalais.data.operation.BackupOperationRecoveryInspector
 import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 import fr.thesdupalais.data.operation.DurableBackupOperationJournal
+import fr.thesdupalais.data.operation.BackupRoomOperationApplier
 import fr.thesdupalais.data.operation.RecoveryInspection
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,7 +34,7 @@ class AppContainer(context: Context) : FirstRunOperations {
         context.applicationContext,
         AppDatabase::class.java,
         "thes-du-palais.db",
-    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
 
     val operationJournal = DurableBackupOperationJournal(
         root = File(context.noBackupFilesDir, "backup-operations"),
@@ -44,6 +46,13 @@ class AppContainer(context: Context) : FirstRunOperations {
     val teaRepository = TeaRepository(database, operationWriteCoordinator)
     val collectionImporter = CollectionImporter(database, preferences, writeCoordinator = operationWriteCoordinator)
     val backupArchiveExporter = BackupArchiveExporter(database, preferences, context.applicationContext.contentResolver)
+    val backupRoomOperationApplier = BackupRoomOperationApplier(
+        database = database,
+        exporter = backupArchiveExporter,
+        preferences = preferences,
+        journal = operationJournal,
+        writeCoordinator = operationWriteCoordinator,
+    )
     val backupArchivePreviewReader = BackupArchivePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
     val backupArchiveMergePreviewReader = BackupArchiveMergePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
 

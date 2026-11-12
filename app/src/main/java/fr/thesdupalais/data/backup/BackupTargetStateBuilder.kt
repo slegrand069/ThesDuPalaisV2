@@ -2,13 +2,17 @@ package fr.thesdupalais.data.backup
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.UUID
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import fr.thesdupalais.domain.references.ReferenceLabelNormalizer
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Pure input metadata which is not carried by backup v1. Paths are app-private relative paths. */
 data class TargetPhotoRecord(val id: String, val teaId: String, val relativePath: String, val position: Int)
-data class TargetImportRecord(val datasetId: String, val contentSha256: String, val schemaVersion: Int)
+data class TargetImportRecord(val datasetId: String, val contentSha256: String, val schemaVersion: Int, val isSuperseded: Boolean = false)
 
 enum class TargetOperation { REPLACE, MERGE }
 data class ConfirmedMergeChange(val entityType: String, val identity: String, val field: String)
@@ -68,6 +72,106 @@ object BackupTargetStateBuilder {
 
     internal fun fingerprintTargetState(state: BackupTargetState): String = digestState(state)
 
+    /** Recomputes the exact 4D.2 local fingerprint without rebuilding or changing a confirmed plan. */
+    internal fun fingerprintLocalSnapshot(
+        snapshotBytes: ByteArray,
+        photos: List<TargetPhotoRecord>,
+        importHistory: List<TargetImportRecord>,
+    ): String {
+        val archive = BackupArchiveValidator.validate(snapshotBytes)
+        val plannerHash = BackupArchiveMergePlanner.localFingerprint(archive)
+        return sha(buildString {
+            append(plannerHash)
+            photos.sortedWith(compareBy<TargetPhotoRecord> { it.id }).forEach {
+                append('|').append(it.id).append(':').append(it.teaId).append(':').append(it.relativePath).append(':').append(it.position)
+            }
+            importHistory.sortedBy { it.datasetId }.forEach {
+                append('|').append(it.datasetId).append(':').append(it.contentSha256).append(':').append(it.schemaVersion).append(':').append(it.isSuperseded)
+            }
+        })
+    }
+
+    /** Strictly checks a persisted target before any Room write. */
+    internal fun validatePreparedState(state: BackupTargetState): List<String> {
+        val errors = mutableListOf<String>()
+        val expectedPaths = setOf("data/teas.json", "data/configuration.json")
+        if (state.payloads.keys != expectedPaths) return listOf("L’état cible ne contient pas exactement les deux ensembles Room attendus.")
+        try {
+            BackupArchiveValidator.validate(validationArchive(state.payloads))
+            val teas = JSONObject(state.payloads.getValue("data/teas.json"))
+            val config = JSONObject(state.payloads.getValue("data/configuration.json"))
+            reconcileAndCheck(teas, config, errors)
+            val prefs = config.getJSONObject("preferences")
+            if (prefs.length() != 2 || prefs.getLong("quantityPerCupMilliGrams") <= 0 || prefs.getLong("lowStockThresholdMilliGrams") < 0) {
+                errors += "Les préférences métier de l’état cible sont invalides."
+            }
+            val teaIds = teas.array("teas").map { it.getString("id") }.toSet()
+            if (state.photosToKeep.any { it.teaId !in teaIds } || state.photosToQuarantine.any { it.teaId in teaIds }) {
+                errors += "Les métadonnées photo ne correspondent pas à l’appartenance des thés à l’état cible."
+            }
+            val allPhotoIds = state.photosToKeep.map { it.id } + state.photosToQuarantine.map { it.id }
+            if (allPhotoIds.distinct().size != allPhotoIds.size ||
+                (state.photosToKeep.map { it.teaId to it.position }.distinct().size != state.photosToKeep.size)) {
+                errors += "Les métadonnées photo contiennent des identifiants ou positions dupliqués."
+            }
+            (state.photosToKeep + state.photosToQuarantine).forEach { photo ->
+                if (photo.relativePath.isBlank() || photo.relativePath.startsWith('/') || '\\' in photo.relativePath || ':' in photo.relativePath ||
+                    photo.relativePath.split('/').any { it.isBlank() || it == "." || it == ".." } || photo.position < 0 ||
+                    runCatching { UUID.fromString(photo.id).toString() == photo.id && UUID.fromString(photo.teaId).toString() == photo.teaId }.getOrDefault(false).not()) {
+                    errors += "Une métadonnée photo de l’état cible est invalide."
+                }
+            }
+            state.supersededImportDatasetIds.forEach { id ->
+                if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false).not()) errors += "Un identifiant d’import remplacé est invalide."
+            }
+        } catch (error: Exception) {
+            errors += "L’état cible préparé est illisible : ${error.message ?: "contenu invalide"}."
+        }
+        return errors.distinct()
+    }
+
+    private fun validationArchive(payloads: Map<String, String>): ByteArray {
+        val normalizedPayloads = payloads.toMutableMap()
+        val teasPayload = JSONObject(payloads.getValue("data/teas.json"))
+        val configurationPayload = JSONObject(payloads.getValue("data/configuration.json"))
+        val references = configurationPayload.array("references").associateBy { it.getString("id") }
+        val required = buildSet {
+            teasPayload.array("teas").forEach { tea ->
+                listOf("categoryId", "statusId", "containerId").forEach { field -> tea.stringOrNull(field)?.let(::add) }
+                associations.forEach { field -> addAll(tea.arrayStrings(field)) }
+            }
+            toList().forEach { id -> references[id]?.stringOrNull("parentCountryId")?.let(::add) }
+        }
+        val dependencyRefs = JSONArray(references.values.filter { it.getString("id") in required }.sortedBy { it.getString("id") })
+        normalizedPayloads["data/teas.json"] = teasPayload.put("references", dependencyRefs).toString()
+        val entryRecords = JSONArray()
+        val entries = normalizedPayloads.toSortedMap().mapValues { it.value.toByteArray(StandardCharsets.UTF_8) }
+        entries.forEach { (path, bytes) ->
+            entryRecords.put(JSONObject().put("path", path).put("mediaType", "application/json")
+                .put("sizeBytes", bytes.size).put("sha256", sha(bytes)))
+        }
+        val manifest = JSONObject()
+            .put("format", BackupArchiveValidator.FORMAT)
+            .put("schemaVersion", BackupArchiveValidator.SCHEMA_VERSION)
+            .put("backupId", "123e4567-e89b-12d3-a456-426614174099")
+            .put("createdAt", "2026-01-01T00:00:00Z")
+            .put("producer", JSONObject().put("application", "ThésDuPalais").put("version", "target-state-validator"))
+            .put("includedSets", JSONArray(listOf("configuration", "teas")))
+            .put("entries", entryRecords)
+        val buffer = ByteArrayOutputStream()
+        ZipOutputStream(buffer).use { zip ->
+            zip.putNextEntry(ZipEntry("manifest.json").apply { time = 0L })
+            zip.write(manifest.toString().toByteArray(StandardCharsets.UTF_8))
+            zip.closeEntry()
+            entries.forEach { (path, bytes) ->
+                zip.putNextEntry(ZipEntry(path).apply { time = 0L })
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        return buffer.toByteArray()
+    }
+
     fun build(request: BackupTargetRequest): BackupTargetResult {
         val blockers = mutableListOf<String>()
         val changes = mutableListOf<TargetChange>()
@@ -84,11 +188,7 @@ object BackupTargetStateBuilder {
         if (local.includedSets != supported) blockers += "L’instantané local doit contenir les thés et la configuration."
         val archiveHash = sha(request.archiveBytes)
         val plannerLocalHash = BackupArchiveMergePlanner.localFingerprint(local)
-        val localHash = sha(buildString {
-            append(plannerLocalHash)
-            request.photos.sortedWith(compareBy<TargetPhotoRecord> { it.id }).forEach { append('|').append(it.id).append(':').append(it.teaId).append(':').append(it.relativePath).append(':').append(it.position) }
-            request.importHistory.sortedBy { it.datasetId }.forEach { append('|').append(it.datasetId).append(':').append(it.contentSha256).append(':').append(it.schemaVersion) }
-        })
+        val localHash = fingerprintLocalSnapshot(request.localSnapshotBytes, request.photos, request.importHistory)
         var plan = request.planner
         if (request.operation == TargetOperation.REPLACE && !request.replacementConfirmed) blockers += "Le remplacement doit être explicitement confirmé."
         if (request.operation == TargetOperation.MERGE) {

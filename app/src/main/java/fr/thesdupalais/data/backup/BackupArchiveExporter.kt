@@ -32,6 +32,12 @@ enum class BackupExportSet(val manifestName: String) {
     ARTICLES("articles"),
 }
 
+data class BackupLocalOperationSnapshot(
+    val archiveBytes: ByteArray,
+    val photos: List<TargetPhotoRecord>,
+    val importHistory: List<TargetImportRecord>,
+)
+
 /** Read-only snapshot writer. Articles remain intentionally unavailable until their model exists. */
 class BackupArchiveExporter(
     private val database: AppDatabase,
@@ -65,38 +71,58 @@ class BackupArchiveExporter(
     suspend fun createArchive(selectedSets: Set<BackupExportSet>): ByteArray {
         if (selectedSets.isEmpty()) throw IllegalArgumentException("Sélectionnez au moins un ensemble à exporter.")
         if (BackupExportSet.ARTICLES in selectedSets) throw UnsupportedOperationException("L’export des articles sera disponible lorsque leur modèle sera implémenté.")
-        val snapshot = database.withTransaction {
-            val allReferences = database.referenceDao().allForBackup()
-            val teas = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allForBackup() else emptyList()
-            val references = if (BackupExportSet.CONFIGURATION in selectedSets) allReferences else {
-                val ids = buildSet {
-                    teas.forEach { tea ->
-                        add(tea.categoryRefId); tea.statusRefId?.let(::add); tea.containerRefId?.let(::add)
-                    }
-                    database.teaDao().allCountriesForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.countryRefId) }
-                    database.teaDao().allRegionsForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.regionRefId); add(it.countryRefId) }
-                    database.teaDao().allAromasForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.aromaRefId) }
-                    database.teaDao().allAromaticProfilesForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.profileRefId) }
-                    database.teaDao().allMomentsForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.momentRefId) }
-                    database.teaDao().allBadgesForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.badgeRefId) }
-                }
-                allReferences.filter { it.id in ids }
-            }
-            Snapshot(
-                references = references,
-                teas = teas,
-                countries = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allCountriesForBackup() else emptyList(),
-                regions = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allRegionsForBackup() else emptyList(),
-                aromas = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allAromasForBackup() else emptyList(),
-                profiles = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allAromaticProfilesForBackup() else emptyList(),
-                moments = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allMomentsForBackup() else emptyList(),
-                badges = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allBadgesForBackup() else emptyList(),
-                tastings = if (BackupExportSet.TEAS in selectedSets) database.tastingDao().allForBackup() else emptyList(),
-                movements = if (BackupExportSet.TEAS in selectedSets) database.stockMovementDao().allForBackup() else emptyList(),
-            )
-        }
+        val snapshot = database.withTransaction { readSnapshot(selectedSets) }
         val preferenceSnapshot = if (BackupExportSet.CONFIGURATION in selectedSets) preferences.preferences.first() else UserPreferences()
         return BackupArchiveWriter.write(snapshot, selectedSets, preferenceSnapshot, applicationVersion, UUID.randomUUID(), now())
+    }
+
+    /** Captures all inputs used by the confirmed 4D.2 local-state fingerprint. */
+    suspend fun captureCurrentOperationSnapshot(): BackupLocalOperationSnapshot {
+        val preferenceSnapshot = preferences.preferences.first()
+        return database.withTransaction { captureCurrentOperationSnapshotWithinTransaction(preferenceSnapshot) }
+    }
+
+    /** Caller must already hold this database's transaction and coordinate DataStore writers. */
+    internal suspend fun captureCurrentOperationSnapshotWithinTransaction(preferenceSnapshot: UserPreferences): BackupLocalOperationSnapshot {
+        val selected = setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION)
+        val snapshot = readSnapshot(selected)
+        val archive = BackupArchiveWriter.write(snapshot, selected, preferenceSnapshot, applicationVersion, UUID.randomUUID(), now())
+        val photos = database.teaPhotoDao().allForBackup().map {
+            TargetPhotoRecord(it.id.toString(), it.teaId.toString(), it.relativePath, it.position)
+        }
+        val importHistory = database.importedDatasetDao().allForBackup().map {
+            TargetImportRecord(it.datasetId.toString(), it.contentSha256, it.schemaVersion, it.isSuperseded)
+        }
+        return BackupLocalOperationSnapshot(archive, photos, importHistory)
+    }
+
+    private suspend fun readSnapshot(selectedSets: Set<BackupExportSet>): Snapshot {
+        val allReferences = database.referenceDao().allForBackup()
+        val teas = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allForBackup() else emptyList()
+        val references = if (BackupExportSet.CONFIGURATION in selectedSets) allReferences else {
+            val ids = buildSet {
+                teas.forEach { tea -> add(tea.categoryRefId); tea.statusRefId?.let(::add); tea.containerRefId?.let(::add) }
+                database.teaDao().allCountriesForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.countryRefId) }
+                database.teaDao().allRegionsForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.regionRefId); add(it.countryRefId) }
+                database.teaDao().allAromasForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.aromaRefId) }
+                database.teaDao().allAromaticProfilesForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.profileRefId) }
+                database.teaDao().allMomentsForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.momentRefId) }
+                database.teaDao().allBadgesForBackup().filter { row -> teas.any { it.id == row.teaId } }.forEach { add(it.badgeRefId) }
+            }
+            allReferences.filter { it.id in ids }
+        }
+        return Snapshot(
+            references = references,
+            teas = teas,
+            countries = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allCountriesForBackup() else emptyList(),
+            regions = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allRegionsForBackup() else emptyList(),
+            aromas = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allAromasForBackup() else emptyList(),
+            profiles = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allAromaticProfilesForBackup() else emptyList(),
+            moments = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allMomentsForBackup() else emptyList(),
+            badges = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allBadgesForBackup() else emptyList(),
+            tastings = if (BackupExportSet.TEAS in selectedSets) database.tastingDao().allForBackup() else emptyList(),
+            movements = if (BackupExportSet.TEAS in selectedSets) database.stockMovementDao().allForBackup() else emptyList(),
+        )
     }
 
     internal data class Snapshot(

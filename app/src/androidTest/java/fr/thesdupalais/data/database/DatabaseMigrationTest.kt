@@ -214,7 +214,7 @@ class DatabaseMigrationTest {
     @Test
     fun roomOperationMarkerSurvivesDatabaseReopen() {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, TEST_DATABASE)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build()
         val marker = BackupOperationMarkerEntity(
             operationId = "123e4567-e89b-12d3-a456-426614174000",
@@ -227,10 +227,49 @@ class DatabaseMigrationTest {
         database.close()
 
         val reopened = Room.databaseBuilder(context, AppDatabase::class.java, TEST_DATABASE)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build()
         kotlinx.coroutines.runBlocking { assertEquals(marker, reopened.backupOperationMarkerDao().findActive()) }
         reopened.close()
+    }
+
+    @Test
+    fun migrationV4ToV5AddsSupersededFlagAndPreservesHistoricalImportRows() {
+        oldDatabase = factory.create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(TEST_DATABASE)
+                .callback(object : SupportSQLiteOpenHelper.Callback(4) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("""CREATE TABLE imported_datasets (
+                            datasetId TEXT NOT NULL PRIMARY KEY, schemaVersion INTEGER NOT NULL, contentSha256 TEXT NOT NULL,
+                            sourceCreatedAtEpochMillis INTEGER NOT NULL, importedAtEpochMillis INTEGER NOT NULL,
+                            referenceCount INTEGER NOT NULL, teaCount INTEGER NOT NULL, tastingCount INTEGER NOT NULL,
+                            stockMovementCount INTEGER NOT NULL, gramsPerCupMilli INTEGER NOT NULL, lowStockThresholdMilli INTEGER NOT NULL)""")
+                        db.execSQL("INSERT INTO imported_datasets VALUES ('123e4567-e89b-12d3-a456-426614174000',1,'${"a".repeat(64)}',1,2,3,4,5,6,7000,25000)")
+                    }
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = error("Unexpected upgrade while creating schema v4")
+                }).build(),
+        )
+        oldDatabase!!.writableDatabase
+        oldDatabase!!.close()
+
+        migratedDatabase = factory.create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(TEST_DATABASE)
+                .callback(object : SupportSQLiteOpenHelper.Callback(5) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema v4")
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        db.beginTransaction()
+                        try { MIGRATION_4_5.migrate(db); db.setTransactionSuccessful() } finally { db.endTransaction() }
+                    }
+                }).build(),
+        )
+        migratedDatabase!!.writableDatabase.query("SELECT datasetId, isSuperseded FROM imported_datasets").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("123e4567-e89b-12d3-a456-426614174000", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+            assertFalse(cursor.moveToNext())
+        }
     }
 
     private companion object {

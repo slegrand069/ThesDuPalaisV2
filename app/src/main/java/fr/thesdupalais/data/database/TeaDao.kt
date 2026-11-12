@@ -61,6 +61,9 @@ interface TeaDao {
     @Update
     suspend fun update(tea: TeaEntity)
 
+    @Query("DELETE FROM teas WHERE id = :teaId")
+    suspend fun deleteById(teaId: UUID): Int
+
     @Query("""
         UPDATE teas SET name = :name, categoryRefId = :categoryRefId, description = :description,
             technicalInformation = :technicalInformation, personalNotes = :personalNotes,
@@ -87,20 +90,38 @@ interface TeaDao {
     @Query("DELETE FROM tea_regions WHERE teaId = :teaId")
     suspend fun deleteRegionsForTea(teaId: UUID)
 
+    @Query("DELETE FROM tea_regions WHERE teaId = :teaId AND regionRefId = :regionId")
+    suspend fun deleteRegion(teaId: UUID, regionId: UUID)
+
     @Query("DELETE FROM tea_countries WHERE teaId = :teaId")
     suspend fun deleteCountriesForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_countries WHERE teaId = :teaId AND countryRefId = :countryId")
+    suspend fun deleteCountry(teaId: UUID, countryId: UUID)
 
     @Query("DELETE FROM tea_aromas WHERE teaId = :teaId")
     suspend fun deleteAromasForTea(teaId: UUID)
 
+    @Query("DELETE FROM tea_aromas WHERE teaId = :teaId AND aromaRefId = :referenceId")
+    suspend fun deleteAroma(teaId: UUID, referenceId: UUID)
+
     @Query("DELETE FROM tea_aromatic_profiles WHERE teaId = :teaId")
     suspend fun deleteAromaticProfilesForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_aromatic_profiles WHERE teaId = :teaId AND profileRefId = :referenceId")
+    suspend fun deleteAromaticProfile(teaId: UUID, referenceId: UUID)
 
     @Query("DELETE FROM tea_moments WHERE teaId = :teaId")
     suspend fun deleteMomentsForTea(teaId: UUID)
 
+    @Query("DELETE FROM tea_moments WHERE teaId = :teaId AND momentRefId = :referenceId")
+    suspend fun deleteMoment(teaId: UUID, referenceId: UUID)
+
     @Query("DELETE FROM tea_badges WHERE teaId = :teaId")
     suspend fun deleteBadgesForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_badges WHERE teaId = :teaId AND badgeRefId = :referenceId")
+    suspend fun deleteBadge(teaId: UUID, referenceId: UUID)
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertCountries(values: List<TeaCountryEntity>)
@@ -257,6 +278,8 @@ interface StockMovementDao {
 
 @Dao
 interface TeaPhotoDao {
+    @Query("SELECT * FROM tea_photos ORDER BY teaId, position, id")
+    suspend fun allForBackup(): List<TeaPhotoEntity>
     @Query("SELECT * FROM tea_photos WHERE teaId = :teaId ORDER BY position")
     fun observeForTea(teaId: UUID): Flow<List<TeaPhotoEntity>>
 
@@ -269,11 +292,16 @@ interface TeaPhotoDao {
 
 @Dao
 interface ImportedDatasetDao {
+    @Query("SELECT * FROM imported_datasets ORDER BY datasetId")
+    suspend fun allForBackup(): List<ImportedDatasetEntity>
     @Query("SELECT * FROM imported_datasets WHERE datasetId = :datasetId LIMIT 1")
     suspend fun findByDatasetId(datasetId: UUID): ImportedDatasetEntity?
 
-    @Query("SELECT * FROM imported_datasets LIMIT 1")
+    @Query("SELECT * FROM imported_datasets WHERE isSuperseded = 0 LIMIT 1")
     suspend fun findAny(): ImportedDatasetEntity?
+
+    @Query("UPDATE imported_datasets SET isSuperseded = 1 WHERE datasetId IN (:datasetIds)")
+    suspend fun markSuperseded(datasetIds: List<UUID>): Int
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(dataset: ImportedDatasetEntity)

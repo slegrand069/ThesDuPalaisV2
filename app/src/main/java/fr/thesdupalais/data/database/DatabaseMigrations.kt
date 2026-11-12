@@ -120,3 +120,10 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         )
     }
 }
+
+/** Keeps historical import rows while allowing replaced datasets to stop blocking a fresh first import. */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `imported_datasets` ADD COLUMN `isSuperseded` INTEGER NOT NULL DEFAULT 0")
+    }
+}

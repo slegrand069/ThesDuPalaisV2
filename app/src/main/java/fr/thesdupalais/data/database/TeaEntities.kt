@@ -233,4 +233,5 @@ data class ImportedDatasetEntity(
     val stockMovementCount: Int,
     val gramsPerCupMilli: Long,
     val lowStockThresholdMilli: Long,
+    val isSuperseded: Boolean = false,
 )
