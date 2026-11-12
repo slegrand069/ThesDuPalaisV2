@@ -33,6 +33,7 @@ data class TeaDetail(
     val aromaticProfiles: List<String>,
     val moments: List<String>,
     val badges: List<String>,
+    val stockMilliGrams: Long? = null,
 )
 
 data class TeaTasting(val id: UUID, val occurredAtEpochMillis: Long, val consumedMilliGrams: Long?)
@@ -89,6 +90,7 @@ internal fun TeaWithDetailData.toTeaDetail(): TeaDetail = TeaDetail(
     aromaticProfiles = aromaticProfiles.displayLabels(),
     moments = moments.displayLabels(),
     badges = badges.displayLabels(),
+    stockMilliGrams = tea.stockMilliGrams,
 )
 
 internal fun TastingEntity.toTeaTasting() = TeaTasting(id, occurredAtEpochMillis, consumedMilliGrams)

@@ -69,7 +69,7 @@ interface TeaDao {
             technicalInformation = :technicalInformation, personalNotes = :personalNotes,
             olfactoryRating = :olfactoryRating, tasteRating = :tasteRating,
             brewTemperatureCelsius = :brewTemperatureCelsius, infusionDurationSeconds = :infusionDurationSeconds,
-            statusRefId = :statusRefId, containerRefId = :containerRefId
+            statusRefId = :statusRefId, containerRefId = :containerRefId, stockMilliGrams = :stockMilliGrams
         WHERE id = :teaId AND archivedAtEpochMillis IS NULL
     """)
     suspend fun updateEditableFields(
@@ -85,6 +85,7 @@ interface TeaDao {
         infusionDurationSeconds: Int?,
         statusRefId: UUID?,
         containerRefId: UUID?,
+        stockMilliGrams: Long?,
     ): Int
 
     @Query("DELETE FROM tea_regions WHERE teaId = :teaId")

@@ -28,6 +28,7 @@ data class NewTea(
     val technicalInformation: String? = null,
     val brewTemperatureCelsius: Int? = null,
     val infusionDurationSeconds: Int? = null,
+    val stockMilliGrams: Long? = null,
 )
 
 data class TeaEditData(
@@ -39,7 +40,7 @@ data class TeaEditData(
 enum class TeaEditableField {
     NAME, CATEGORY, STATUS, CONTAINER, COUNTRIES, REGIONS, AROMAS, PROFILES, MOMENTS, BADGES,
     TASTE_RATING, OLFACTORY_RATING, PERSONAL_NOTES, DESCRIPTION, TECHNICAL_INFORMATION,
-    BREW_TEMPERATURE, INFUSION_DURATION,
+    BREW_TEMPERATURE, INFUSION_DURATION, STOCK,
 }
 
 class TeaRepository(
@@ -85,6 +86,7 @@ class TeaRepository(
                 technicalInformation = tea.technicalInformation,
                 brewTemperatureCelsius = tea.brewTemperatureCelsius,
                 infusionDurationSeconds = tea.infusionDurationSeconds,
+                stockMilliGrams = tea.stockMilliGrams,
             ),
             references = references,
         )
@@ -135,6 +137,7 @@ class TeaRepository(
             val technicalInformation = if (TeaEditableField.TECHNICAL_INFORMATION in changedFields) normalizeOptional(tea.technicalInformation) else oldTea.technicalInformation
             val temperature = if (TeaEditableField.BREW_TEMPERATURE in changedFields) tea.brewTemperatureCelsius else oldTea.brewTemperatureCelsius
             val duration = if (TeaEditableField.INFUSION_DURATION in changedFields) tea.infusionDurationSeconds else oldTea.infusionDurationSeconds
+            val stock = if (TeaEditableField.STOCK in changedFields) tea.stockMilliGrams else oldTea.stockMilliGrams
 
             requireRating(tasteRating, "La note gustative")
             requireRating(olfactoryRating, "La note olfactive")
@@ -144,6 +147,7 @@ class TeaRepository(
                 }
             }
             require(duration == null || duration > 0) { "La durée d’infusion doit être supérieure à zéro seconde." }
+            require(stock == null || stock >= 0) { "Le stock ne peut pas être négatif." }
 
             suspend fun requireReference(id: UUID, kind: ReferenceKind): ReferenceEntity {
                 val reference = database.referenceDao().findById(id)
@@ -184,7 +188,8 @@ class TeaRepository(
             val scalarChanged = name != oldTea.name || categoryId != oldTea.categoryRefId || statusId != oldTea.statusRefId ||
                 containerId != oldTea.containerRefId || description != oldTea.description || technicalInformation != oldTea.technicalInformation ||
                 personalNotes != oldTea.personalNotes || tasteRating != oldTea.tasteRating || olfactoryRating != oldTea.olfactoryRating ||
-                temperature != oldTea.brewTemperatureCelsius || duration != oldTea.infusionDurationSeconds
+                temperature != oldTea.brewTemperatureCelsius || duration != oldTea.infusionDurationSeconds ||
+                stock != oldTea.stockMilliGrams
             val associationsChanged = countrySet != oldIds.getValue(ReferenceKind.COUNTRY) ||
                 regionSet != oldIds.getValue(ReferenceKind.REGION) || aromaIds != oldIds.getValue(ReferenceKind.AROMA) ||
                 profileIds != oldIds.getValue(ReferenceKind.AROMATIC_PROFILE) || momentIds != oldIds.getValue(ReferenceKind.MOMENT) ||
@@ -205,6 +210,7 @@ class TeaRepository(
                     infusionDurationSeconds = duration,
                     statusRefId = statusId,
                     containerRefId = containerId,
+                    stockMilliGrams = stock,
                 ) == 1) { "Ce thé n’est plus disponible pour modification." }
             }
             if (countrySet != oldIds.getValue(ReferenceKind.COUNTRY) || regionSet != oldIds.getValue(ReferenceKind.REGION)) {
@@ -247,6 +253,7 @@ class TeaRepository(
         require(tea.infusionDurationSeconds == null || tea.infusionDurationSeconds > 0) {
             "La durée d’infusion doit être supérieure à zéro seconde."
         }
+        require(tea.stockMilliGrams == null || tea.stockMilliGrams >= 0) { "Le stock ne peut pas être négatif." }
 
         val referenceDao = database.referenceDao()
         suspend fun requireReference(id: UUID, kind: ReferenceKind): ReferenceEntity {
@@ -290,7 +297,7 @@ class TeaRepository(
                 infusionDurationSeconds = tea.infusionDurationSeconds,
                 statusRefId = tea.statusId,
                 containerRefId = tea.containerId,
-                stockMilliGrams = null,
+                stockMilliGrams = tea.stockMilliGrams,
                 archivedAtEpochMillis = null,
             ),
         )

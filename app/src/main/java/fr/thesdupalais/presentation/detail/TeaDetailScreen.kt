@@ -148,6 +148,15 @@ private fun TeaDetailBody(state: TeaDetailUiState.Content, modifier: Modifier = 
             }
         }
 
+        DetailCard(Modifier.testTag("tea-detail-stock")) {
+            SectionLabel("STOCK")
+            Text(
+                text = state.tea.stockMilliGrams?.let(::formatStockQuantity) ?: "Non renseigné",
+                color = if (state.tea.stockMilliGrams == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+
         DetailCard(Modifier.testTag("tea-detail-tasting-notes")) {
             SectionLabel("NOTES DE DÉGUSTATION")
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

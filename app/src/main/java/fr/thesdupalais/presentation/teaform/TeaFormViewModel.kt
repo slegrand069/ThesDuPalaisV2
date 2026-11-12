@@ -36,6 +36,7 @@ data class TeaFormUiState(
     val technicalInformation: String = "",
     val brewTemperatureCelsius: Int? = null,
     val infusionDurationInput: String = "",
+    val stockInput: String = "",
     val references: Map<ReferenceKind, List<ReferenceValue>> = emptyMap(),
     val loadedReferenceKinds: Set<ReferenceKind> = emptySet(),
     val isSaving: Boolean = false,
@@ -46,7 +47,7 @@ data class TeaFormUiState(
     val draft: TeaFormDraft get() = TeaFormDraft(
         name, categoryId, statusId, containerId, countryIds, regionIds, aromaIds, profileIds, momentIds, badgeIds,
         tasteRating, olfactoryRating, personalNotes, description, technicalInformation,
-        brewTemperatureCelsius, infusionDurationInput,
+        brewTemperatureCelsius, infusionDurationInput, stockInput,
     )
     val isDirty: Boolean get() = if (editTeaId != null) {
         initialDraft != null && draft != initialDraft
@@ -54,7 +55,7 @@ data class TeaFormUiState(
             countryIds.isNotEmpty() || regionIds.isNotEmpty() || aromaIds.isNotEmpty() || profileIds.isNotEmpty() ||
             momentIds.isNotEmpty() || badgeIds.isNotEmpty() || tasteRating != null || olfactoryRating != null ||
             personalNotes.isNotEmpty() || description.isNotEmpty() || technicalInformation.isNotEmpty() ||
-            brewTemperatureCelsius != null || infusionDurationInput.isNotEmpty()
+            brewTemperatureCelsius != null || infusionDurationInput.isNotEmpty() || stockInput.isNotEmpty()
 }
 
 data class TeaFormDraft(
@@ -75,6 +76,7 @@ data class TeaFormDraft(
     val technicalInformation: String,
     val brewTemperatureCelsius: Int?,
     val infusionDurationInput: String,
+    val stockInput: String = "",
 ) {
     fun changedFieldsSince(initial: TeaFormDraft): Set<TeaEditableField> = buildSet {
         if (name != initial.name) add(TeaEditableField.NAME)
@@ -94,6 +96,7 @@ data class TeaFormDraft(
         if (technicalInformation != initial.technicalInformation) add(TeaEditableField.TECHNICAL_INFORMATION)
         if (brewTemperatureCelsius != initial.brewTemperatureCelsius) add(TeaEditableField.BREW_TEMPERATURE)
         if (infusionDurationInput != initial.infusionDurationInput) add(TeaEditableField.INFUSION_DURATION)
+        if (stockInput != initial.stockInput) add(TeaEditableField.STOCK)
     }
 }
 
@@ -149,6 +152,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
                             technicalInformation = value.technicalInformation.orEmpty(),
                             brewTemperatureCelsius = value.brewTemperatureCelsius,
                             infusionDurationInput = value.infusionDurationSeconds?.toString().orEmpty(),
+                            stockInput = value.stockMilliGrams?.let(::formatStockInput).orEmpty(),
                         )
                         _uiState.update { state ->
                             state.copy(
@@ -169,6 +173,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
                                 technicalInformation = draft.technicalInformation,
                                 brewTemperatureCelsius = draft.brewTemperatureCelsius,
                                 infusionDurationInput = draft.infusionDurationInput,
+                                stockInput = draft.stockInput,
                                 references = state.references.mapValues { (kind, options) ->
                                     (options + retainedArchivedReferences[kind].orEmpty()).distinctBy { it.id }
                                 },
@@ -189,6 +194,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
     fun updateOlfactoryRating(value: Double?) = change { copy(olfactoryRating = value) }
     fun updateTemperature(value: Int?) = change { copy(brewTemperatureCelsius = value) }
     fun updateDuration(value: String) = change { copy(infusionDurationInput = value) }
+    fun updateStock(value: String) = change { copy(stockInput = value) }
 
     fun toggleReference(kind: ReferenceKind, id: UUID, selected: Boolean) {
         change {
@@ -238,6 +244,12 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
             _uiState.update { it.copy(error = "La durée d’infusion doit être un nombre de secondes supérieur à zéro.") }
             return
         }
+        val stockMilliGrams = try {
+            parseStockInput(current.stockInput)
+        } catch (_: Exception) {
+            _uiState.update { it.copy(error = "Saisissez un stock positif ou nul, avec au plus trois décimales.") }
+            return
+        }
         val initial = current.initialDraft
         if (current.editTeaId != null && initial != null && current.draft == initial) {
             savedTeaId = current.editTeaId
@@ -266,6 +278,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
                         technicalInformation = current.technicalInformation,
                         brewTemperatureCelsius = current.brewTemperatureCelsius,
                         infusionDurationSeconds = duration,
+                        stockMilliGrams = stockMilliGrams,
                     )
                 if (current.editTeaId == null) repository.create(values)
                 else {
@@ -289,6 +302,22 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
 
     private fun Set<UUID>.toggle(id: UUID, selected: Boolean): Set<UUID> =
         if (selected) this + id else this - id
+}
+
+private fun formatStockInput(milliGrams: Long): String =
+    java.math.BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',')
+
+internal fun parseStockInput(input: String): Long? {
+    val text = input.trim()
+    if (text.isEmpty()) return null
+    require(text.matches(Regex("(?:\\d+(?:[,.]\\d{0,3})?|[,.]\\d{1,3})"))) { "Format de stock invalide." }
+    val grams = java.math.BigDecimal(text.replace(',', '.'))
+    require(grams.signum() >= 0) { "Le stock ne peut pas être négatif." }
+    return try {
+        grams.movePointRight(3).longValueExact()
+    } catch (error: ArithmeticException) {
+        throw IllegalArgumentException("Le stock est trop élevé.", error)
+    }
 }
 
 class TeaFormViewModelFactory(

@@ -107,6 +107,17 @@ internal fun TeaFormContent(
                     singleLine = true,
                 )
             }
+            FormCard("Stock actuel", "tea-form-stock") {
+                OutlinedTextField(
+                    value = state.stockInput,
+                    onValueChange = viewModel::updateStock,
+                    label = { Text("Quantité en grammes") },
+                    supportingText = { Text("Facultatif. Laissez vide si le stock est inconnu.") },
+                    modifier = Modifier.fillMaxWidth().testTag("tea-form-stock-input"),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                )
+            }
             FormCard("Catégorie et statut", "tea-form-category-status") {
                 Text("Catégorie *", style = MaterialTheme.typography.labelLarge)
                 ReferenceChips(

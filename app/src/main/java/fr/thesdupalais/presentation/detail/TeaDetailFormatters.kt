@@ -17,6 +17,9 @@ internal fun formatTastingDateTime(
 internal fun formatConsumedQuantity(milliGrams: Long): String =
     BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',') + " g"
 
+internal fun formatStockQuantity(milliGrams: Long): String =
+    BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',') + " g"
+
 internal fun formatDetailRating(rating: Double): String {
     val value = BigDecimal.valueOf(rating)
     val nearestTenth = value.setScale(1, java.math.RoundingMode.HALF_UP)

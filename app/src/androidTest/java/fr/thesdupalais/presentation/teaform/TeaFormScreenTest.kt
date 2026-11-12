@@ -70,6 +70,25 @@ class TeaFormScreenTest {
         assertEquals(0, runBlocking { database.stockMovementDao().count() })
     }
 
+    @Test fun savesOptionalStockEnteredWithFrenchDecimalComma() {
+        val savedId = AtomicReference<UUID?>(null)
+        composeRule.setContent {
+            ThesDuPalaisTheme { TeaFormScreen(viewModel, onCancel = {}, onSaved = { savedId.set(it) }) }
+        }
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("tea-form-category-${greenCategoryId()}"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("tea-form-name").performTextInput("Thé avec stock")
+        composeRule.onNodeWithTag("tea-form-category-${greenCategoryId()}").performClick()
+        composeRule.onNodeWithTag("tea-form-stock-input").performTextInput("12,5")
+        composeRule.onNodeWithTag("tea-form-save").performClick()
+        composeRule.waitUntil(5_000) { savedId.get() != null }
+
+        assertEquals(12_500L, runBlocking { database.teaDao().findById(requireNotNull(savedId.get()))?.stockMilliGrams })
+        assertEquals(0, runBlocking { database.stockMovementDao().count() })
+    }
+
     @Test fun asksBeforeAbandoningDirtyFormAndCancelDoesNotWrite() {
         var cancelled = false
         composeRule.setContent {
@@ -134,6 +153,7 @@ class TeaFormScreenTest {
                 composeRule.onAllNodes(androidx.compose.ui.test.hasTestTag("tea-form-category-${greenCategoryId()}")).fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.runOnIdle { assertEquals("Imported tea", editViewModel.uiState.value.name) }
+        composeRule.runOnIdle { assertEquals("12,5", editViewModel.uiState.value.stockInput) }
         composeRule.onNodeWithTag("tea-form-temperature-value").assertTextEquals("82 °C · valeur historique")
         composeRule.onNodeWithTag("tea-form-save").performClick()
         composeRule.waitUntil(2_000) { savedId.get() == teaId }

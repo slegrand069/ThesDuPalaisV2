@@ -102,6 +102,7 @@ class CatalogueViewModelTest {
         database.teaDao().updateEditableFields(
             teaId, "Sencha du matin modifié", category.id, null, null, null, null, null,
             null, null, null, null,
+            null,
         )
         viewModel.setQuery("")
         val updated = withTimeout(5_000) {

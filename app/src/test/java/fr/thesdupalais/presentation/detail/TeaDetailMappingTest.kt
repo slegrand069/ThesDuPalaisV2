@@ -49,6 +49,7 @@ class TeaDetailMappingTest {
         assertEquals(listOf("Végétal"), result.aromaticProfiles)
         assertEquals(listOf("Matin"), result.moments)
         assertEquals(listOf("Bio"), result.badges)
+        assertNull(result.stockMilliGrams)
     }
 
     private fun reference(

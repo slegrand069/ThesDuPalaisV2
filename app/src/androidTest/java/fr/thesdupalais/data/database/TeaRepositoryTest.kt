@@ -110,6 +110,27 @@ class TeaRepositoryTest {
         assertEquals(0, database.stockMovementDao().count())
     }
 
+    @Test fun createsAndUpdatesKnownStockWithoutWritingStockHistory() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Thé avec stock", category.id, stockMilliGrams = 12_500L))
+        assertEquals(12_500L, database.teaDao().findById(teaId)?.stockMilliGrams)
+
+        repository.update(
+            teaId,
+            NewTea("Thé avec stock", category.id, stockMilliGrams = 0L),
+            setOf(TeaEditableField.STOCK),
+        )
+        assertEquals(0L, database.teaDao().findById(teaId)?.stockMilliGrams)
+
+        repository.update(
+            teaId,
+            NewTea("Thé avec stock", category.id, stockMilliGrams = null),
+            setOf(TeaEditableField.STOCK),
+        )
+        assertNull(database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals(0, database.stockMovementDao().count())
+    }
+
     @Test fun rejectsWrongReferenceTypeAndInvalidNumbersBeforeWriting() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
         val aroma = reference(ReferenceKind.AROMA, "Aroma")

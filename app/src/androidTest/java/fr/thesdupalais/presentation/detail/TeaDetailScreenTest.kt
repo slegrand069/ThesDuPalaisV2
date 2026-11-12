@@ -29,7 +29,7 @@ class TeaDetailScreenTest {
             ThesDuPalaisTheme {
                 TeaDetailContent(
                     TeaDetailUiState.Content(
-                        tea = detail(),
+                        tea = detail().copy(stockMilliGrams = 12_500L),
                         tastings = listOf(TeaTasting(UUID.randomUUID(), occurredAt, 1_250L)),
                     ),
                     onBack = { backPressed = true },
@@ -41,6 +41,8 @@ class TeaDetailScreenTest {
         composeRule.onNodeWithText("Thé vert", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Statut : Dans ma collection", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Contenant : Boîte", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("tea-detail-stock").assertIsDisplayed()
+        assertTextExists("12,5 g")
         assertTextExists("8,5 / 10")
         assertTextExists("9 / 10")
         assertTextExists("Notes personnelles")
@@ -89,6 +91,7 @@ class TeaDetailScreenTest {
         }
 
         composeRule.onNodeWithText("Aucune dégustation enregistrée.").assertIsDisplayed()
+        assertTextExists("Non renseigné")
         composeRule.onAllNodesWithTag("tea-detail-additional-information").assertCountEquals(0)
         composeRule.onAllNodesWithTag("tea-detail-preparation").assertCountEquals(0)
         composeRule.onAllNodesWithTag("tea-detail-aromas-moments").assertCountEquals(0)
@@ -101,6 +104,20 @@ class TeaDetailScreenTest {
 
         composeRule.onNodeWithText("Ce thé n’est pas disponible dans le catalogue.").assertIsDisplayed()
         composeRule.onNodeWithTag("tea-detail-edit").assertIsNotEnabled()
+    }
+
+    @Test fun distinguishesKnownZeroStockFromUnknownStock() {
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail().copy(stockMilliGrams = 0L), emptyList()),
+                    onBack = {},
+                )
+            }
+        }
+
+        assertTextExists("0 g")
+        composeRule.onAllNodesWithText("Non renseigné").assertCountEquals(0)
     }
 
     private fun detail() = TeaDetail(

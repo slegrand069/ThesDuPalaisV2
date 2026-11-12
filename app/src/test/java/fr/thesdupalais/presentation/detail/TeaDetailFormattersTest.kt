@@ -21,6 +21,12 @@ class TeaDetailFormattersTest {
         assertEquals("8,375", formatDetailRating(8.375))
     }
 
+    @Test fun formatsKnownStockInGramsWithoutLosingStoredPrecision() {
+        assertEquals("0 g", formatStockQuantity(0))
+        assertEquals("2,5 g", formatStockQuantity(2_500))
+        assertEquals("2,501 g", formatStockQuantity(2_501))
+    }
+
     @Test fun formatsInfusionDurationsInMinutesAndSeconds() {
         assertEquals("45 s", formatInfusionDuration(45))
         assertEquals("2 min", formatInfusionDuration(120))
