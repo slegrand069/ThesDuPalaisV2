@@ -132,6 +132,7 @@ class BackupTargetStateBuilderTest {
         val result = BackupTargetStateBuilder.build(BackupTargetRequest(emptyTarget, local, TargetOperation.REPLACE, setOf("teas"), true, photos = listOf(photo)))
         assertTrue(result.applicable)
         assertTrue(result.state!!.photosToKeep.isEmpty())
+        assertEquals(listOf(photo), result.state.photosToQuarantine)
         assertTrue(result.warnings.any { it.contains("quarantaine") })
     }
 

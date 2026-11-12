@@ -8,6 +8,7 @@ import java.text.Normalizer
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 
 data class NewTea(
     val name: String,
@@ -41,7 +42,10 @@ enum class TeaEditableField {
     BREW_TEMPERATURE, INFUSION_DURATION,
 }
 
-class TeaRepository(private val database: AppDatabase) {
+class TeaRepository(
+    private val database: AppDatabase,
+    private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
+) {
     fun observeSelectableReferences(kind: ReferenceKind): Flow<List<ReferenceValue>> =
         database.referenceDao().observeSelectableByKind(kind.name).map { references ->
             references.map(ReferenceEntity::toDomain)
@@ -86,20 +90,23 @@ class TeaRepository(private val database: AppDatabase) {
         )
     }
 
-    suspend fun create(tea: NewTea): UUID = try {
-        createInTransaction(tea)
-    } catch (error: SQLiteConstraintException) {
-        throw IllegalStateException(
-            "Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été enregistrée.",
-            error,
-        )
+    suspend fun create(tea: NewTea): UUID = writeCoordinator.withWritePermit {
+        try {
+            createInTransaction(tea)
+        } catch (error: SQLiteConstraintException) {
+            throw IllegalStateException(
+                "Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été enregistrée.",
+                error,
+            )
+        }
     }
 
     suspend fun update(
         teaId: UUID,
         tea: NewTea,
         changedFields: Set<TeaEditableField>,
-    ): Boolean = try {
+    ): Boolean = writeCoordinator.withWritePermit {
+      try {
         database.withTransaction {
             val dao = database.teaDao()
             val old = dao.findActiveDetailForEdit(teaId)
@@ -224,8 +231,9 @@ class TeaRepository(private val database: AppDatabase) {
             }
             true
         }
-    } catch (error: SQLiteConstraintException) {
-        throw IllegalStateException("Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été modifiée.", error)
+      } catch (error: SQLiteConstraintException) {
+          throw IllegalStateException("Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été modifiée.", error)
+      }
     }
 
     private suspend fun createInTransaction(tea: NewTea): UUID = database.withTransaction {

@@ -24,13 +24,19 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 
 class CollectionImporter(
     private val database: AppDatabase,
     private val preferencesStore: UserPreferencesStore,
+    private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
 ) {
-    suspend fun importJson(json: String): CollectionImportResult {
+    suspend fun importJson(json: String): CollectionImportResult = writeCoordinator.withWritePermit {
+        importJsonUnderPermit(json)
+    }
+
+    private suspend fun importJsonUnderPermit(json: String): CollectionImportResult {
         val document = CollectionJsonParser.parse(json)
         val contentHash = sha256(document)
 

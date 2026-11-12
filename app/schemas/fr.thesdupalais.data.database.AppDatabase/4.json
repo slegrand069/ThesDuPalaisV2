@@ -1,0 +1,1068 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 4,
+    "identityHash": "9b3d3127c3344cf5a0ff9674a862708f",
+    "entities": [
+      {
+        "tableName": "reference_values",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, `normalizedLabel` TEXT NOT NULL, `semanticKey` TEXT, `parentCountryId` TEXT, `scopeKey` TEXT NOT NULL, `archivedAt` INTEGER, `displayPriority` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`parentCountryId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "normalizedLabel",
+            "columnName": "normalizedLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "semanticKey",
+            "columnName": "semanticKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "parentCountryId",
+            "columnName": "parentCountryId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "archivedAt",
+            "columnName": "archivedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "displayPriority",
+            "columnName": "displayPriority",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reference_values_kind_normalizedLabel_scopeKey",
+            "unique": true,
+            "columnNames": [
+              "kind",
+              "normalizedLabel",
+              "scopeKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reference_values_kind_normalizedLabel_scopeKey` ON `${TABLE_NAME}` (`kind`, `normalizedLabel`, `scopeKey`)"
+          },
+          {
+            "name": "index_reference_values_kind_semanticKey",
+            "unique": true,
+            "columnNames": [
+              "kind",
+              "semanticKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reference_values_kind_semanticKey` ON `${TABLE_NAME}` (`kind`, `semanticKey`)"
+          },
+          {
+            "name": "index_reference_values_parentCountryId",
+            "unique": false,
+            "columnNames": [
+              "parentCountryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reference_values_parentCountryId` ON `${TABLE_NAME}` (`parentCountryId`)"
+          },
+          {
+            "name": "index_reference_values_id_parentCountryId",
+            "unique": true,
+            "columnNames": [
+              "id",
+              "parentCountryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reference_values_id_parentCountryId` ON `${TABLE_NAME}` (`id`, `parentCountryId`)"
+          },
+          {
+            "name": "index_reference_values_kind_displayPriority",
+            "unique": false,
+            "columnNames": [
+              "kind",
+              "displayPriority"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reference_values_kind_displayPriority` ON `${TABLE_NAME}` (`kind`, `displayPriority`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "parentCountryId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "teas",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `legacyId` INTEGER, `name` TEXT NOT NULL, `categoryRefId` TEXT NOT NULL, `description` TEXT, `technicalInformation` TEXT, `personalNotes` TEXT, `olfactoryRating` REAL, `tasteRating` REAL, `brewTemperatureCelsius` INTEGER, `infusionDurationSeconds` INTEGER, `statusRefId` TEXT, `containerRefId` TEXT, `stockMilliGrams` INTEGER, `archivedAtEpochMillis` INTEGER, PRIMARY KEY(`id`), FOREIGN KEY(`categoryRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`statusRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`containerRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legacyId",
+            "columnName": "legacyId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryRefId",
+            "columnName": "categoryRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "technicalInformation",
+            "columnName": "technicalInformation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "personalNotes",
+            "columnName": "personalNotes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "olfactoryRating",
+            "columnName": "olfactoryRating",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "tasteRating",
+            "columnName": "tasteRating",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "brewTemperatureCelsius",
+            "columnName": "brewTemperatureCelsius",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "infusionDurationSeconds",
+            "columnName": "infusionDurationSeconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "statusRefId",
+            "columnName": "statusRefId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "containerRefId",
+            "columnName": "containerRefId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stockMilliGrams",
+            "columnName": "stockMilliGrams",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "archivedAtEpochMillis",
+            "columnName": "archivedAtEpochMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_teas_legacyId",
+            "unique": true,
+            "columnNames": [
+              "legacyId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_teas_legacyId` ON `${TABLE_NAME}` (`legacyId`)"
+          },
+          {
+            "name": "index_teas_categoryRefId",
+            "unique": false,
+            "columnNames": [
+              "categoryRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_teas_categoryRefId` ON `${TABLE_NAME}` (`categoryRefId`)"
+          },
+          {
+            "name": "index_teas_statusRefId",
+            "unique": false,
+            "columnNames": [
+              "statusRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_teas_statusRefId` ON `${TABLE_NAME}` (`statusRefId`)"
+          },
+          {
+            "name": "index_teas_containerRefId",
+            "unique": false,
+            "columnNames": [
+              "containerRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_teas_containerRefId` ON `${TABLE_NAME}` (`containerRefId`)"
+          },
+          {
+            "name": "index_teas_name",
+            "unique": false,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_teas_name` ON `${TABLE_NAME}` (`name`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "categoryRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "statusRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "containerRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_countries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`teaId` TEXT NOT NULL, `countryRefId` TEXT NOT NULL, PRIMARY KEY(`teaId`, `countryRefId`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`countryRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "countryRefId",
+            "columnName": "countryRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "teaId",
+            "countryRefId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_countries_countryRefId",
+            "unique": false,
+            "columnNames": [
+              "countryRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_countries_countryRefId` ON `${TABLE_NAME}` (`countryRefId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "countryRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_regions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`teaId` TEXT NOT NULL, `regionRefId` TEXT NOT NULL, `countryRefId` TEXT NOT NULL, PRIMARY KEY(`teaId`, `regionRefId`), FOREIGN KEY(`teaId`, `countryRefId`) REFERENCES `tea_countries`(`teaId`, `countryRefId`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`regionRefId`, `countryRefId`) REFERENCES `reference_values`(`id`, `parentCountryId`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "regionRefId",
+            "columnName": "regionRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "countryRefId",
+            "columnName": "countryRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "teaId",
+            "regionRefId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_regions_teaId_countryRefId",
+            "unique": false,
+            "columnNames": [
+              "teaId",
+              "countryRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_regions_teaId_countryRefId` ON `${TABLE_NAME}` (`teaId`, `countryRefId`)"
+          },
+          {
+            "name": "index_tea_regions_regionRefId_countryRefId",
+            "unique": false,
+            "columnNames": [
+              "regionRefId",
+              "countryRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_regions_regionRefId_countryRefId` ON `${TABLE_NAME}` (`regionRefId`, `countryRefId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "tea_countries",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId",
+              "countryRefId"
+            ],
+            "referencedColumns": [
+              "teaId",
+              "countryRefId"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "regionRefId",
+              "countryRefId"
+            ],
+            "referencedColumns": [
+              "id",
+              "parentCountryId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_aromas",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`teaId` TEXT NOT NULL, `aromaRefId` TEXT NOT NULL, PRIMARY KEY(`teaId`, `aromaRefId`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`aromaRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "aromaRefId",
+            "columnName": "aromaRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "teaId",
+            "aromaRefId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_aromas_aromaRefId",
+            "unique": false,
+            "columnNames": [
+              "aromaRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_aromas_aromaRefId` ON `${TABLE_NAME}` (`aromaRefId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "aromaRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_aromatic_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`teaId` TEXT NOT NULL, `profileRefId` TEXT NOT NULL, PRIMARY KEY(`teaId`, `profileRefId`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`profileRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileRefId",
+            "columnName": "profileRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "teaId",
+            "profileRefId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_aromatic_profiles_profileRefId",
+            "unique": false,
+            "columnNames": [
+              "profileRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_aromatic_profiles_profileRefId` ON `${TABLE_NAME}` (`profileRefId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "profileRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_moments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`teaId` TEXT NOT NULL, `momentRefId` TEXT NOT NULL, PRIMARY KEY(`teaId`, `momentRefId`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`momentRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "momentRefId",
+            "columnName": "momentRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "teaId",
+            "momentRefId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_moments_momentRefId",
+            "unique": false,
+            "columnNames": [
+              "momentRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_moments_momentRefId` ON `${TABLE_NAME}` (`momentRefId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "momentRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_badges",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`teaId` TEXT NOT NULL, `badgeRefId` TEXT NOT NULL, PRIMARY KEY(`teaId`, `badgeRefId`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`badgeRefId`) REFERENCES `reference_values`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "badgeRefId",
+            "columnName": "badgeRefId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "teaId",
+            "badgeRefId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_badges_badgeRefId",
+            "unique": false,
+            "columnNames": [
+              "badgeRefId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tea_badges_badgeRefId` ON `${TABLE_NAME}` (`badgeRefId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "reference_values",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "badgeRefId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tastings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `teaId` TEXT NOT NULL, `occurredAtEpochMillis` INTEGER NOT NULL, `recordedAtEpochMillis` INTEGER NOT NULL, `consumedMilliGrams` INTEGER, PRIMARY KEY(`id`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAtEpochMillis",
+            "columnName": "occurredAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordedAtEpochMillis",
+            "columnName": "recordedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "consumedMilliGrams",
+            "columnName": "consumedMilliGrams",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tastings_teaId_occurredAtEpochMillis",
+            "unique": false,
+            "columnNames": [
+              "teaId",
+              "occurredAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tastings_teaId_occurredAtEpochMillis` ON `${TABLE_NAME}` (`teaId`, `occurredAtEpochMillis`)"
+          },
+          {
+            "name": "index_tastings_id_teaId",
+            "unique": true,
+            "columnNames": [
+              "id",
+              "teaId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tastings_id_teaId` ON `${TABLE_NAME}` (`id`, `teaId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "stock_movements",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `teaId` TEXT NOT NULL, `kind` TEXT NOT NULL, `deltaMilliGrams` INTEGER, `stockAfterMilliGrams` INTEGER NOT NULL, `occurredAtEpochMillis` INTEGER NOT NULL, `recordedAtEpochMillis` INTEGER NOT NULL, `tastingId` TEXT, `note` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`tastingId`, `teaId`) REFERENCES `tastings`(`id`, `teaId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deltaMilliGrams",
+            "columnName": "deltaMilliGrams",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "stockAfterMilliGrams",
+            "columnName": "stockAfterMilliGrams",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAtEpochMillis",
+            "columnName": "occurredAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordedAtEpochMillis",
+            "columnName": "recordedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tastingId",
+            "columnName": "tastingId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stock_movements_teaId_occurredAtEpochMillis",
+            "unique": false,
+            "columnNames": [
+              "teaId",
+              "occurredAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_stock_movements_teaId_occurredAtEpochMillis` ON `${TABLE_NAME}` (`teaId`, `occurredAtEpochMillis`)"
+          },
+          {
+            "name": "index_stock_movements_tastingId_teaId",
+            "unique": true,
+            "columnNames": [
+              "tastingId",
+              "teaId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_stock_movements_tastingId_teaId` ON `${TABLE_NAME}` (`tastingId`, `teaId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "tastings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tastingId",
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id",
+              "teaId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tea_photos",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `teaId` TEXT NOT NULL, `relativePath` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`teaId`) REFERENCES `teas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teaId",
+            "columnName": "teaId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relativePath",
+            "columnName": "relativePath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tea_photos_teaId_position",
+            "unique": true,
+            "columnNames": [
+              "teaId",
+              "position"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tea_photos_teaId_position` ON `${TABLE_NAME}` (`teaId`, `position`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "teas",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "teaId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "imported_datasets",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`datasetId` TEXT NOT NULL, `schemaVersion` INTEGER NOT NULL, `contentSha256` TEXT NOT NULL, `sourceCreatedAtEpochMillis` INTEGER NOT NULL, `importedAtEpochMillis` INTEGER NOT NULL, `referenceCount` INTEGER NOT NULL, `teaCount` INTEGER NOT NULL, `tastingCount` INTEGER NOT NULL, `stockMovementCount` INTEGER NOT NULL, `gramsPerCupMilli` INTEGER NOT NULL, `lowStockThresholdMilli` INTEGER NOT NULL, PRIMARY KEY(`datasetId`))",
+        "fields": [
+          {
+            "fieldPath": "datasetId",
+            "columnName": "datasetId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schemaVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentSha256",
+            "columnName": "contentSha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceCreatedAtEpochMillis",
+            "columnName": "sourceCreatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "importedAtEpochMillis",
+            "columnName": "importedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceCount",
+            "columnName": "referenceCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teaCount",
+            "columnName": "teaCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tastingCount",
+            "columnName": "tastingCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stockMovementCount",
+            "columnName": "stockMovementCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gramsPerCupMilli",
+            "columnName": "gramsPerCupMilli",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lowStockThresholdMilli",
+            "columnName": "lowStockThresholdMilli",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "datasetId"
+          ]
+        }
+      },
+      {
+        "tableName": "backup_operation_marker",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`singletonId` INTEGER NOT NULL, `operationId` TEXT NOT NULL, `state` TEXT NOT NULL, `archiveSha256` TEXT NOT NULL, `targetFingerprint` TEXT NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, PRIMARY KEY(`singletonId`))",
+        "fields": [
+          {
+            "fieldPath": "singletonId",
+            "columnName": "singletonId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationId",
+            "columnName": "operationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "archiveSha256",
+            "columnName": "archiveSha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetFingerprint",
+            "columnName": "targetFingerprint",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "singletonId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '9b3d3127c3344cf5a0ff9674a862708f')"
+    ]
+  }
+}

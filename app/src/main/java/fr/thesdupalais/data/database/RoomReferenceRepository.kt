@@ -11,8 +11,12 @@ import java.util.UUID
 import java.text.Normalizer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 
-class RoomReferenceRepository(private val database: AppDatabase) {
+class RoomReferenceRepository(
+    private val database: AppDatabase,
+    private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
+) {
     private val dao get() = database.referenceDao()
 
     fun observe(kind: ReferenceKind): Flow<List<ReferenceSummary>> =
@@ -45,7 +49,7 @@ class RoomReferenceRepository(private val database: AppDatabase) {
         }
     }
 
-    suspend fun deleteIfUnused(id: UUID): ReferenceDeletionStatus = database.withTransaction {
+    suspend fun deleteIfUnused(id: UUID): ReferenceDeletionStatus = writeCoordinator.withWritePermit { database.withTransaction {
         val reference = dao.findById(id) ?: return@withTransaction ReferenceDeletionStatus.Missing
         if (isSeedManaged(reference)) return@withTransaction ReferenceDeletionStatus.Standard
         val status = deletionStatus(reference)
@@ -56,7 +60,7 @@ class RoomReferenceRepository(private val database: AppDatabase) {
             val latest = deletionStatus(reference)
             if (latest == ReferenceDeletionStatus.Eligible) ReferenceDeletionStatus.RestrictedByDependency else latest
         }
-    }
+    } }
 
     private suspend fun deletionStatus(reference: ReferenceEntity): ReferenceDeletionStatus {
         val teaCount = dao.countTeaUsage(reference.kind, reference.id)
@@ -73,7 +77,7 @@ class RoomReferenceRepository(private val database: AppDatabase) {
     }
 
     suspend fun create(kind: ReferenceKind, rawLabel: String, parentCountryId: UUID? = null): UUID =
-        database.withTransaction {
+        writeCoordinator.withWritePermit { database.withTransaction {
             val label = validateLabel(rawLabel)
             val parent = if (kind == ReferenceKind.REGION) {
                 requireNotNull(parentCountryId) { "Sélectionnez un pays pour cette région." }
@@ -93,9 +97,9 @@ class RoomReferenceRepository(private val database: AppDatabase) {
             val id = UUID.randomUUID()
             dao.insert(ReferenceEntity(id, kind.name, label, normalized, null, parent, scope, null, 0))
             id
-        }
+        } }
 
-    suspend fun rename(id: UUID, rawLabel: String, expectedKind: ReferenceKind? = null) = database.withTransaction {
+    suspend fun rename(id: UUID, rawLabel: String, expectedKind: ReferenceKind? = null) = writeCoordinator.withWritePermit { database.withTransaction {
         val label = validateLabel(rawLabel)
         val current = requireNotNull(dao.findById(id)) { "Cette référence n’existe plus." }
         require(expectedKind == null || current.kind == expectedKind.name) { "Cette valeur n’appartient pas à ce référentiel." }
@@ -104,7 +108,7 @@ class RoomReferenceRepository(private val database: AppDatabase) {
             "Une valeur identique existe déjà dans ce référentiel."
         }
         check(dao.rename(id, label, normalized) == 1) { "Le renommage n’a pas pu être enregistré." }
-    }
+    } }
 
     private fun validateLabel(raw: String): String {
         val cleaned = Normalizer.normalize(raw.trim().replace(Regex("\\s+"), " "), Normalizer.Form.NFC)

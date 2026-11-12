@@ -18,8 +18,9 @@ import androidx.room.TypeConverters
         StockMovementEntity::class,
         TeaPhotoEntity::class,
         ImportedDatasetEntity::class,
+        BackupOperationMarkerEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)
@@ -30,4 +31,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun stockMovementDao(): StockMovementDao
     abstract fun teaPhotoDao(): TeaPhotoDao
     abstract fun importedDatasetDao(): ImportedDatasetDao
+    abstract fun backupOperationMarkerDao(): BackupOperationMarkerDao
 }

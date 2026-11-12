@@ -103,3 +103,20 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         )
     }
 }
+
+/** Empty coordination marker table; target data remains exclusively in existing business tables. */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `backup_operation_marker` (
+                `singletonId` INTEGER NOT NULL,
+                `operationId` TEXT NOT NULL,
+                `state` TEXT NOT NULL,
+                `archiveSha256` TEXT NOT NULL,
+                `targetFingerprint` TEXT NOT NULL,
+                `updatedAtEpochMillis` INTEGER NOT NULL,
+                PRIMARY KEY(`singletonId`)
+            )""",
+        )
+    }
+}

@@ -31,6 +31,8 @@ data class BackupTargetState(
     val photosToKeep: List<TargetPhotoRecord>,
     /** Historical rows remain present; these IDs must cease acting as current duplicate-import guards. */
     val supersededImportDatasetIds: Set<String>,
+    /** Local media metadata that must be quarantined before a future destructive Room commit. */
+    val photosToQuarantine: List<TargetPhotoRecord> = emptyList(),
 )
 
 data class TargetChange(val set: String, val identity: String, val action: String, val fields: List<String> = emptyList())
@@ -63,6 +65,8 @@ object BackupTargetStateBuilder {
         "containerId", "stockMilliGrams", "archivedAt",
     )
     private val associations = listOf("countryIds", "regionIds", "aromaIds", "aromaticProfileIds", "momentIds", "badgeIds")
+
+    internal fun fingerprintTargetState(state: BackupTargetState): String = digestState(state)
 
     fun build(request: BackupTargetRequest): BackupTargetResult {
         val blockers = mutableListOf<String>()
@@ -128,6 +132,7 @@ object BackupTargetStateBuilder {
         val state = if (blockers.isEmpty()) BackupTargetState(
             payloads = payloads.mapValues { canonicalJson(it.value) }.toSortedMap(),
             photosToKeep = keptPhotos,
+            photosToQuarantine = removedPhotos.sortedWith(compareBy<TargetPhotoRecord> { it.teaId }.thenBy { it.position }.thenBy { it.id }),
             supersededImportDatasetIds = superseded,
         ) else null
         val opDigest = sha(canonicalRequest(request, archiveHash, localHash, plan))
@@ -386,7 +391,12 @@ object BackupTargetStateBuilder {
         p?.blockingConflicts?.sorted()?.forEach { append("|conflict:").append(it) }
         p?.referenceIdRemap?.toSortedMap()?.forEach { (from, to) -> append("|reference:").append(from).append(':').append(to) }
     }
-    private fun digestState(s: BackupTargetState) = sha(s.payloads.toSortedMap().entries.joinToString("\n") { "${it.key}\u0000${it.value}" } + "\n" + s.photosToKeep.joinToString("\n") { "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" } + "\n" + s.supersededImportDatasetIds.sorted().joinToString("\n"))
+    private fun digestState(s: BackupTargetState) = sha(
+        s.payloads.toSortedMap().entries.joinToString("\n") { "${it.key}\u0000${canonical(JSONObject(it.value))}" } +
+            "\nkeep\n" + s.photosToKeep.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") { "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" } +
+            "\nquarantine\n" + s.photosToQuarantine.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") { "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" } +
+            "\nsuperseded\n" + s.supersededImportDatasetIds.sorted().joinToString("\n"),
+    )
     private fun payloadCanonical(a: JSONObject, b: JSONObject) = canonical(a) + canonical(b)
     private fun sha(text: String) = sha(text.toByteArray(StandardCharsets.UTF_8))
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

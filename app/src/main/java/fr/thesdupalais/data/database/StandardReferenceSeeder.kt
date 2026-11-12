@@ -2,9 +2,13 @@ package fr.thesdupalais.data.database
 
 import androidx.room.withTransaction
 import fr.thesdupalais.domain.references.StandardReferenceSeeds
+import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 
-class StandardReferenceSeeder(private val database: AppDatabase) {
-    suspend fun seed() = database.withTransaction { seedWithinTransaction() }
+class StandardReferenceSeeder(
+    private val database: AppDatabase,
+    private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
+) {
+    suspend fun seed() = writeCoordinator.withWritePermit { database.withTransaction { seedWithinTransaction() } }
 
     suspend fun seedWithinTransaction() {
         val dao = database.referenceDao()

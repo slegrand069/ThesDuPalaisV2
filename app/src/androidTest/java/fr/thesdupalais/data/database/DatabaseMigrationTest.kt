@@ -14,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import androidx.room.Room
 
 @RunWith(AndroidJUnit4::class)
 class DatabaseMigrationTest {
@@ -167,6 +168,69 @@ class DatabaseMigrationTest {
         migratedDatabase!!.writableDatabase.query(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'imported_datasets'",
         ).use { cursor -> assertTrue(cursor.moveToFirst()) }
+    }
+
+    @Test
+    fun migrationV3ToV4AddsEmptySingleRowOperationMarkerWithoutChangingExistingData() {
+        oldDatabase = factory.create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(TEST_DATABASE)
+                .callback(object : SupportSQLiteOpenHelper.Callback(3) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE existing_v3_data (id INTEGER NOT NULL PRIMARY KEY, value TEXT NOT NULL)")
+                        db.execSQL("INSERT INTO existing_v3_data VALUES (1, 'preserved')")
+                    }
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                        error("Unexpected upgrade while creating schema v3")
+                })
+                .build(),
+        )
+        oldDatabase!!.writableDatabase
+        oldDatabase!!.close()
+
+        migratedDatabase = factory.create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(TEST_DATABASE)
+                .callback(object : SupportSQLiteOpenHelper.Callback(4) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = error("Expected existing schema v3")
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        db.beginTransaction()
+                        try {
+                            MIGRATION_3_4.migrate(db)
+                            db.setTransactionSuccessful()
+                        } finally { db.endTransaction() }
+                    }
+                })
+                .build(),
+        )
+        val migrated = migratedDatabase!!.writableDatabase
+        migrated.query("SELECT value FROM existing_v3_data WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("preserved", cursor.getString(0))
+        }
+        migrated.query("SELECT singletonId FROM backup_operation_marker").use { assertFalse(it.moveToFirst()) }
+    }
+
+    @Test
+    fun roomOperationMarkerSurvivesDatabaseReopen() {
+        val database = Room.databaseBuilder(context, AppDatabase::class.java, TEST_DATABASE)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .build()
+        val marker = BackupOperationMarkerEntity(
+            operationId = "123e4567-e89b-12d3-a456-426614174000",
+            state = "ROOM_COMMITTED",
+            archiveSha256 = "a".repeat(64),
+            targetFingerprint = "b".repeat(64),
+            updatedAtEpochMillis = 123L,
+        )
+        kotlinx.coroutines.runBlocking { database.backupOperationMarkerDao().replace(marker) }
+        database.close()
+
+        val reopened = Room.databaseBuilder(context, AppDatabase::class.java, TEST_DATABASE)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .build()
+        kotlinx.coroutines.runBlocking { assertEquals(marker, reopened.backupOperationMarkerDao().findActive()) }
+        reopened.close()
     }
 
     private companion object {

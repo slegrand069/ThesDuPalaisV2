@@ -10,6 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
+import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -29,8 +30,10 @@ interface UserPreferencesStore {
 
 class LocalPreferencesRepository internal constructor(
     private val dataStore: DataStore<Preferences>,
+    private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
 ) : UserPreferencesStore {
-    constructor(context: Context) : this(context.applicationContext.settingsDataStore)
+    constructor(context: Context, writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator()) :
+        this(context.applicationContext.settingsDataStore, writeCoordinator)
 
     val preferences: Flow<UserPreferences> = dataStore.data.map { values ->
         UserPreferences(
@@ -45,25 +48,27 @@ class LocalPreferencesRepository internal constructor(
     suspend fun isInstallationInitialized(): Boolean = installationInitialized.first()
 
     suspend fun markInstallationInitialized() {
-        dataStore.edit { it[INSTALLATION_INITIALIZED] = true }
+        writeCoordinator.withWritePermit { dataStore.edit { it[INSTALLATION_INITIALIZED] = true } }
     }
 
     suspend fun setGramsPerCupMilli(value: Long) {
         require(value > 0) { "Le grammage par tasse doit être positif." }
-        dataStore.edit { it[GRAMS_PER_CUP_MILLI] = value }
+        writeCoordinator.withWritePermit { dataStore.edit { it[GRAMS_PER_CUP_MILLI] = value } }
     }
 
     suspend fun setLowStockThresholdMilli(value: Long) {
         require(value >= 0) { "Le seuil de stock faible ne peut pas être négatif." }
-        dataStore.edit { it[LOW_STOCK_THRESHOLD_MILLI] = value }
+        writeCoordinator.withWritePermit { dataStore.edit { it[LOW_STOCK_THRESHOLD_MILLI] = value } }
     }
 
     override suspend fun setPreferences(preferences: UserPreferences) {
         require(preferences.gramsPerCupMilli > 0) { "Le grammage par tasse doit être positif." }
         require(preferences.lowStockThresholdMilli >= 0) { "Le seuil de stock faible ne peut pas être négatif." }
-        dataStore.edit {
-            it[GRAMS_PER_CUP_MILLI] = preferences.gramsPerCupMilli
-            it[LOW_STOCK_THRESHOLD_MILLI] = preferences.lowStockThresholdMilli
+        writeCoordinator.withWritePermit {
+            dataStore.edit {
+                it[GRAMS_PER_CUP_MILLI] = preferences.gramsPerCupMilli
+                it[LOW_STOCK_THRESHOLD_MILLI] = preferences.lowStockThresholdMilli
+            }
         }
     }
 
