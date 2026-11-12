@@ -23,6 +23,8 @@ data class BackupArchiveMergePlan(
     val items: List<MergeItem>,
     val blockingConflicts: List<String>,
     val limitations: List<String>,
+    /** Resolved archive reference UUID to local/target UUID mapping used by this exact plan. */
+    val referenceIdRemap: Map<String, String> = emptyMap(),
 ) {
     val canApplyAfterConfirmation: Boolean get() = blockingConflicts.isEmpty()
 }
@@ -149,6 +151,7 @@ object BackupArchiveMergePlanner {
                 "Le plan est en lecture seule et ne peut pas être appliqué par ce composant.",
                 "Les photos de thé ne sont pas transportées par le contrat v1 et doivent rester inchangées.",
             ),
+            referenceIdRemap = referenceMap.toSortedMap(),
         )
     }
 
@@ -326,7 +329,7 @@ object BackupArchiveMergePlanner {
     }
     private fun referenceOrder(kind: String) = when (kind) { "COUNTRY" -> 0; "REGION" -> 2; else -> 1 }
     private fun remapIds(ids: List<String>, mapping: Map<String, String>) = ids.map { mapping[it] ?: it }.toSet()
-    private fun localFingerprint(archive: BackupArchiveValidator.ValidatedArchive): String {
+    internal fun localFingerprint(archive: BackupArchiveValidator.ValidatedArchive): String {
         val digest = MessageDigest.getInstance("SHA-256")
         archive.entries.toSortedMap().forEach { (path, bytes) ->
             digest.update(path.toByteArray(StandardCharsets.UTF_8)); digest.update(0)
