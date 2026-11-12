@@ -51,15 +51,14 @@ class BackupRoomOperationApplierTest {
     private lateinit var journal: DurableBackupOperationJournal
     private lateinit var coordinator: BackupOperationWriteCoordinator
     private var fault: RoomApplyFaultPoint? = null
+    private var finalizationFault: FinalizationFaultPoint? = null
     private lateinit var applier: BackupRoomOperationApplier
+    private lateinit var finalizer: BackupOperationFinalizer
 
     @Before fun setUp() {
         tempRoot = File(context.cacheDir, "room-apply-${UUID.randomUUID()}").apply { mkdirs() }
         database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val storeFile = File(tempRoot, "settings.preferences_pb")
-        preferences = LocalPreferencesRepository(PreferenceDataStoreFactory.create(scope = scope, produceFile = { storeFile }))
-        exporter = BackupArchiveExporter(database, preferences, context.contentResolver)
         journal = DurableBackupOperationJournal(File(tempRoot, "journal"), File(tempRoot, "media"))
         coordinator = BackupOperationWriteCoordinator {
             val pending = journal.readPending()
@@ -69,8 +68,14 @@ class BackupRoomOperationApplierTest {
                 journalStates = pending.associate { it.operationId to it.state }, roomMarkerState = marker?.state,
             )
         }
+        val storeFile = File(tempRoot, "settings.preferences_pb")
+        preferences = LocalPreferencesRepository(PreferenceDataStoreFactory.create(scope = scope, produceFile = { storeFile }), coordinator)
+        exporter = BackupArchiveExporter(database, preferences, context.contentResolver)
         applier = BackupRoomOperationApplier(database, exporter, preferences, journal, coordinator, faultInjector = RoomApplyFaultInjector { point ->
             if (fault == point) error("Panne simulée à $point")
+        })
+        finalizer = BackupOperationFinalizer(database, exporter, preferences, journal, coordinator, FinalizationFaultInjector { point ->
+            if (finalizationFault == point) error("Panne simulée à $point")
         })
     }
 
@@ -212,6 +217,67 @@ class BackupRoomOperationApplierTest {
         assertEquals(BackupOperationState.ABORTED, journal.readAll().single().state)
     }
 
+    @Test fun configurationFinalizationIsAtomicIdempotentAndPreservesInstallationMarker() = runBlocking {
+        preferences.markInstallationInitialized()
+        val incoming = archive(BackupArchiveExporter.Snapshot(
+            references = emptyList(), teas = emptyList(), countries = emptyList(), regions = emptyList(), aromas = emptyList(), profiles = emptyList(), moments = emptyList(), badges = emptyList(), tastings = emptyList(), movements = emptyList(),
+        ), setOf(BackupExportSet.CONFIGURATION), UserPreferences(9200, 41000))
+        val prepared = prepare(incoming, TargetOperation.REPLACE, setOf("configuration"), replacementConfirmed = true)
+        applier.apply(prepared.first, prepared.second)
+        val activeEntry = journal.readPending().single()
+        val activeMarker = database.backupOperationMarkerDao().findActive()!!
+        assertEquals(BackupOperationState.ROOM_COMMITTED, activeEntry.state)
+        assertEquals(RecoveryFinding.ROOM_COMMITTED_NEEDS_FORWARD_FINALIZATION, BackupOperationRecoveryInspector.inspect(
+            setOf(activeEntry.operationId), activeMarker.operationId,
+            journalStates = mapOf(activeEntry.operationId to activeEntry.state), roomMarkerState = activeMarker.state,
+        ).finding)
+        finalizationFault = FinalizationFaultPoint.AFTER_DATASTORE_EDIT_BEFORE_FLAG
+        val finalizationFailure = runCatching { finalizer.finalize(prepared.first) }.exceptionOrNull()
+        val failureMessage = if (finalizationFailure is BackupOperationPendingException) "${finalizationFailure.inspection.finding}:${finalizationFailure.inspection.operationId}:${finalizationFailure.inspection.detail}" else finalizationFailure?.toString().orEmpty()
+        assertTrue(failureMessage.ifBlank { "La panne DataStore attendue n’a pas été injectée." }, finalizationFailure != null)
+        assertTrue(finalizationFailure?.message ?: "", finalizationFailure?.message.orEmpty().contains("Panne simulée"))
+        assertEquals(UserPreferences(9200, 41000), preferences.preferences.first())
+        finalizationFault = null
+        // Simulates a new process using the same persisted Room, DataStore and journal files.
+        val reopenedJournal = DurableBackupOperationJournal(File(tempRoot, "journal"), File(tempRoot, "media"))
+        val recovered = BackupOperationFinalizer(database, exporter, preferences, reopenedJournal, coordinator)
+        recovered.finalize(prepared.first)
+        recovered.finalize(prepared.first)
+        assertEquals(UserPreferences(9200, 41000), preferences.preferences.first())
+        assertTrue(preferences.isInstallationInitialized())
+        assertNull(database.backupOperationMarkerDao().findActive())
+        assertEquals(BackupOperationState.COMPLETE, reopenedJournal.readAll().single().state)
+    }
+
+    @Test fun mediaInterruptionResumesAndPreservesAFileStillReferencedByTarget() = runBlocking {
+        val category = reference(CATEGORY, "CATEGORY", "Catégorie")
+        database.referenceDao().insert(category)
+        database.teaDao().insert(tea(OLD_TEA, 101, "Ancien", CATEGORY))
+        database.teaDao().insert(tea(NEW_TEA, 202, "Conservé", CATEGORY))
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/remove.jpg", 0))
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO_OLD_SHARED, OLD_TEA, "photos/shared.jpg", 1))
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO_KEPT, NEW_TEA, "photos/shared.jpg", 0))
+        val removed = File(tempRoot, "media/photos/remove.jpg").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val shared = File(tempRoot, "media/photos/shared.jpg").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(8, 9, 10, 11)) }
+        val incoming = archive(BackupArchiveExporter.Snapshot(
+            references = listOf(category), teas = listOf(tea(NEW_TEA, 202, "Conservé", CATEGORY)), countries = emptyList(), regions = emptyList(), aromas = emptyList(), profiles = emptyList(), moments = emptyList(), badges = emptyList(), tastings = emptyList(), movements = emptyList(),
+        ), setOf(BackupExportSet.TEAS))
+        val prepared = prepare(incoming, TargetOperation.REPLACE, setOf("teas"), replacementConfirmed = true)
+        applier.apply(prepared.first, prepared.second)
+        finalizationFault = FinalizationFaultPoint.AFTER_MEDIA_COPY_BEFORE_SOURCE_DELETE
+        assertTrue(runCatching { finalizer.finalize(prepared.first) }.isFailure)
+        assertTrue(removed.exists())
+        assertTrue("source stays while a target photo still references it", shared.exists())
+        finalizationFault = null
+        val reopenedJournal = DurableBackupOperationJournal(File(tempRoot, "journal"), File(tempRoot, "media"))
+        BackupOperationFinalizer(database, exporter, preferences, reopenedJournal, coordinator).finalize(prepared.first)
+        assertFalse(removed.exists())
+        assertTrue(shared.exists())
+        assertNull(database.backupOperationMarkerDao().findActive())
+        assertEquals(listOf(PHOTO_KEPT), database.teaPhotoDao().allForBackup().map { it.id })
+        assertEquals(BackupOperationState.COMPLETE, reopenedJournal.readAll().single().state)
+    }
+
     private suspend fun prepare(
         archive: ByteArray,
         operation: TargetOperation,
@@ -250,6 +316,8 @@ class BackupRoomOperationApplierTest {
         val OLD_TEA = UUID.fromString("123e4567-e89b-12d3-a456-426614174110")
         val NEW_TEA = UUID.fromString("123e4567-e89b-12d3-a456-426614174111")
         val PHOTO = UUID.fromString("123e4567-e89b-12d3-a456-426614174120")
+        val PHOTO_KEPT = UUID.fromString("123e4567-e89b-12d3-a456-426614174121")
+        val PHOTO_OLD_SHARED = UUID.fromString("123e4567-e89b-12d3-a456-426614174122")
         val TASTING = UUID.fromString("123e4567-e89b-12d3-a456-426614174130")
         val MOVEMENT = UUID.fromString("123e4567-e89b-12d3-a456-426614174131")
         val NEW_TASTING = UUID.fromString("123e4567-e89b-12d3-a456-426614174132")

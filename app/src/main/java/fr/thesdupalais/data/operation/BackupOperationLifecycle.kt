@@ -19,7 +19,7 @@ object BackupOperationStateMachine {
         BackupOperationState.ROOM_APPLYING to setOf(BackupOperationState.ROOM_COMMITTED, BackupOperationState.ABORTED, BackupOperationState.RECOVERY_REQUIRED),
         BackupOperationState.ROOM_COMMITTED to setOf(BackupOperationState.FINALIZING, BackupOperationState.RECOVERY_REQUIRED),
         BackupOperationState.FINALIZING to setOf(BackupOperationState.COMPLETE, BackupOperationState.RECOVERY_REQUIRED),
-        BackupOperationState.RECOVERY_REQUIRED to emptySet(),
+        BackupOperationState.RECOVERY_REQUIRED to setOf(BackupOperationState.FINALIZING, BackupOperationState.ABORTED),
         BackupOperationState.COMPLETE to emptySet(),
         BackupOperationState.ABORTED to emptySet(),
     )
@@ -30,11 +30,7 @@ object BackupOperationStateMachine {
         require(canTransition(from, to)) { "Transition d’opération interdite : $from → $to." }
     }
 
-    fun isTerminal(state: BackupOperationState): Boolean = state in setOf(
-        BackupOperationState.COMPLETE,
-        BackupOperationState.ABORTED,
-        BackupOperationState.RECOVERY_REQUIRED,
-    )
+    fun isTerminal(state: BackupOperationState): Boolean = state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED)
 }
 
 enum class RecoveryFinding {
@@ -43,6 +39,8 @@ enum class RecoveryFinding {
     ROOM_COMMITTED_NEEDS_FORWARD_FINALIZATION,
     JOURNAL_ROOM_MARKER_MISMATCH,
     CORRUPT_OR_UNREADABLE_JOURNAL,
+    RECOVERY_FAILED,
+    TERMINAL_CLEANUP_REQUIRED,
 }
 
 data class RecoveryInspection(val finding: RecoveryFinding, val operationId: String? = null, val detail: String? = null) {
@@ -68,6 +66,7 @@ object BackupOperationRecoveryInspector {
                 BackupOperationState.ROOM_COMMITTED,
                 BackupOperationState.FINALIZING,
                 BackupOperationState.RECOVERY_REQUIRED,
+                BackupOperationState.COMPLETE,
             )
             return if (roomOperationId in journalOperationIds && roomMarkerValid && roomCommitPossible) {
                 RecoveryInspection(RecoveryFinding.ROOM_COMMITTED_NEEDS_FORWARD_FINALIZATION, roomOperationId)

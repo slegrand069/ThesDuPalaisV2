@@ -41,7 +41,7 @@ class BackupOperationWriteCoordinator(
             val status = try { inspect() } catch (_: Exception) {
                 RecoveryInspection(RecoveryFinding.CORRUPT_OR_UNREADABLE_JOURNAL, detail = "État de récupération inaccessible; écritures suspendues.")
             }
-            if (status.finding !in setOf(RecoveryFinding.UNCOMMITTED_OPERATION_NEEDS_DECISION, RecoveryFinding.ROOM_COMMITTED_NEEDS_FORWARD_FINALIZATION) || status.operationId != operationId) {
+            if (status.finding !in setOf(RecoveryFinding.UNCOMMITTED_OPERATION_NEEDS_DECISION, RecoveryFinding.ROOM_COMMITTED_NEEDS_FORWARD_FINALIZATION, RecoveryFinding.TERMINAL_CLEANUP_REQUIRED) || status.operationId != operationId) {
                 throw BackupOperationPendingException(status)
             }
             withContext(PermitContext(this)) { block() }

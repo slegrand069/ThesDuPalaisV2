@@ -21,13 +21,19 @@ import fr.thesdupalais.data.operation.BackupOperationRecoveryInspector
 import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 import fr.thesdupalais.data.operation.DurableBackupOperationJournal
 import fr.thesdupalais.data.operation.BackupRoomOperationApplier
+import fr.thesdupalais.data.operation.BackupOperationFinalizer
+import fr.thesdupalais.data.operation.BackupOperationState
+import fr.thesdupalais.data.operation.RecoveryFinding
 import fr.thesdupalais.data.operation.RecoveryInspection
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class AppContainer(context: Context) : FirstRunOperations {
+    private val recoveryMutex = Mutex()
     private val recoveryStateMutable = MutableStateFlow<RecoveryInspection?>(null)
     val recoveryInspection: StateFlow<RecoveryInspection?> = recoveryStateMutable.asStateFlow()
     val database: AppDatabase = Room.databaseBuilder(
@@ -53,28 +59,74 @@ class AppContainer(context: Context) : FirstRunOperations {
         journal = operationJournal,
         writeCoordinator = operationWriteCoordinator,
     )
+    private val backupOperationFinalizer = BackupOperationFinalizer(
+        database, backupArchiveExporter, preferences, operationJournal, operationWriteCoordinator,
+    )
     val backupArchivePreviewReader = BackupArchivePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
     val backupArchiveMergePreviewReader = BackupArchiveMergePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
 
     override suspend fun initialize() {
-        val recovery = inspectPendingOperation()
+        val recovery = recoverPendingOperation()
         if (recovery.blocksWrites) throw IllegalStateException(
             recovery.detail ?: "Une opération inachevée doit être récupérée avant l’initialisation.",
         )
         StandardReferenceSeeder(database, operationWriteCoordinator).seed()
     }
 
-    /** Read-only startup check. Recovery actions are intentionally not provided by this sublot. */
+    /** Performs one bounded recovery pass. It never loops; an incomplete pass remains write-blocking. */
+    suspend fun recoverPendingOperation(): RecoveryInspection = recoveryMutex.withLock {
+        try {
+            val all = operationJournal.readAll()
+            val marker = database.backupOperationMarkerDao().findActive()
+            val pending = all.filterNot { it.state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED) }
+            if (pending.size > 1) throw IllegalStateException("Plusieurs opérations inachevées sont présentes; récupération bloquée.")
+            if (marker != null) {
+                val entry = all.singleOrNull { it.operationId == marker.operationId }
+                    ?: throw IllegalStateException("Marqueur Room sans journal durable correspondant.")
+                backupOperationFinalizer.finalize(entry.operationId)
+            } else {
+                val entry = pending.singleOrNull()
+                if (entry != null) {
+                    if (entry.state !in setOf(BackupOperationState.PREPARING, BackupOperationState.PREPARED, BackupOperationState.ROOM_APPLYING)) {
+                        throw IllegalStateException("Le journal affirme un commit Room sans marqueur; récupération bloquée.")
+                    }
+                    operationWriteCoordinator.withRecoveryPermit(entry.operationId) {
+                        operationJournal.cleanupPayloadArtifacts(entry.operationId)
+                        operationJournal.transition(entry.operationId, BackupOperationState.ABORTED, "Interruption avant validation Room; aucune donnée métier modifiée.")
+                    }
+                }
+                all.filter { it.state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED) &&
+                    (operationJournal.hasQuarantineArtifacts(it.operationId) || operationJournal.hasPayloadArtifacts(it.operationId)) }.forEach { terminal ->
+                    operationWriteCoordinator.withRecoveryPermit(terminal.operationId) {
+                        operationJournal.cleanupQuarantine(terminal.operationId)
+                        operationJournal.cleanupPayloadArtifacts(terminal.operationId)
+                    }
+                }
+            }
+            inspectPendingOperation()
+        } catch (error: Exception) {
+            RecoveryInspection(RecoveryFinding.RECOVERY_FAILED, detail = "Récupération interrompue : ${error.message ?: error.javaClass.simpleName}. Les écritures restent bloquées.")
+                .also { recoveryStateMutable.value = it }
+        }
+    }
+
+    /** Read-only status probe used by ordinary writers and diagnostics. */
     suspend fun inspectPendingOperation(): RecoveryInspection {
         val result = try {
-        val pending = operationJournal.readPending()
+        val all = operationJournal.readAll()
         val marker = database.backupOperationMarkerDao().findActive()
-        BackupOperationRecoveryInspector.inspect(
+        val pending = if (marker != null) all else all.filterNot { it.state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED) }
+        val inspected = BackupOperationRecoveryInspector.inspect(
             journalOperationIds = pending.map { it.operationId }.toSet(),
             roomOperationId = marker?.operationId,
             journalStates = pending.associate { it.operationId to it.state },
             roomMarkerState = marker?.state,
         )
+        if (inspected.finding == RecoveryFinding.NONE && marker == null) {
+            val terminal = all.firstOrNull { it.state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED) &&
+                (operationJournal.hasQuarantineArtifacts(it.operationId) || operationJournal.hasPayloadArtifacts(it.operationId)) }
+            if (terminal != null) RecoveryInspection(RecoveryFinding.TERMINAL_CLEANUP_REQUIRED, terminal.operationId, "Nettoyage durable d’une opération terminée requis; écritures suspendues.") else inspected
+        } else inspected
         } catch (error: Exception) {
             BackupOperationRecoveryInspector.inspect(emptySet(), null, journalReadFailed = true)
         }

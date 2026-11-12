@@ -72,6 +72,17 @@ class LocalPreferencesRepository internal constructor(
         }
     }
 
+    /** Reserved for the recovery engine; performs the two business preference writes atomically. */
+    internal suspend fun setPreferencesForRecovery(operationId: String, preferences: UserPreferences) {
+        require(preferences.gramsPerCupMilli > 0 && preferences.lowStockThresholdMilli >= 0) { "Préférences métier invalides." }
+        writeCoordinator.withRecoveryPermit(operationId) {
+            dataStore.edit {
+                it[GRAMS_PER_CUP_MILLI] = preferences.gramsPerCupMilli
+                it[LOW_STOCK_THRESHOLD_MILLI] = preferences.lowStockThresholdMilli
+            }
+        }
+    }
+
     private companion object {
         val GRAMS_PER_CUP_MILLI = longPreferencesKey("grams_per_cup_milli")
         val LOW_STOCK_THRESHOLD_MILLI = longPreferencesKey("low_stock_threshold_milli")

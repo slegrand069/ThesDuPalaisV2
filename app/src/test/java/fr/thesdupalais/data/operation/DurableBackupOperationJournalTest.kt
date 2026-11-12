@@ -78,6 +78,26 @@ class DurableBackupOperationJournalTest {
         assertThrows(IOException::class.java) { journal.readArchive(entry) }
     }
 
+    @Test fun finalizationProgressSurvivesJournalReopenAndIsIdempotent() {
+        val root = newRoot("finalization-progress")
+        val initial = DurableBackupOperationJournal(root)
+        val state = target()
+        val archiveBytes = archive()
+        initial.prepare(OP_ID, TargetOperation.REPLACE, setOf("teas"), archiveBytes, state, fingerprints(archiveBytes, state))
+        initial.transition(OP_ID, BackupOperationState.ROOM_APPLYING)
+        initial.transition(OP_ID, BackupOperationState.ROOM_COMMITTED)
+        initial.transition(OP_ID, BackupOperationState.FINALIZING)
+        initial.markDataStoreFinalized(OP_ID)
+        initial.markMediaFinalized(OP_ID, PHOTO_ID)
+
+        val reopened = DurableBackupOperationJournal(root)
+        val progress = reopened.readAll().single()
+        assertTrue(progress.dataStoreFinalized)
+        assertEquals(setOf(PHOTO_ID), progress.finalizedMediaPhotoIds)
+        assertTrue(reopened.markDataStoreFinalized(OP_ID).dataStoreFinalized)
+        assertEquals(setOf(PHOTO_ID), reopened.markMediaFinalized(OP_ID, PHOTO_ID).finalizedMediaPhotoIds)
+    }
+
     @Test fun mediaForRemovedTeaIsCopiedIntoPrivateOperationWorkspaceAndVerified() {
         val root = newRoot("media-journal")
         val mediaRoot = newRoot("media-source")

@@ -32,6 +32,8 @@ data class DurableOperationEntry(
     val updatedAtEpochMillis: Long,
     val lastError: String?,
     val mediaArtifacts: List<DurableMediaArtifact> = emptyList(),
+    val dataStoreFinalized: Boolean = false,
+    val finalizedMediaPhotoIds: Set<String> = emptySet(),
 )
 
 data class DurableMediaArtifact(
@@ -155,6 +157,78 @@ class DurableBackupOperationJournal(
         return updated
     }
 
+    fun markDataStoreFinalized(operationId: String): DurableOperationEntry = update(operationId) { it.copy(dataStoreFinalized = true, lastError = null) }
+
+    fun markMediaFinalized(operationId: String, photoId: String): DurableOperationEntry = update(operationId) {
+        it.copy(finalizedMediaPhotoIds = it.finalizedMediaPhotoIds + photoId, lastError = null)
+    }
+
+    fun recordError(operationId: String, error: Throwable): DurableOperationEntry = update(operationId) {
+        it.copy(lastError = (error.message ?: error.javaClass.simpleName).take(2000))
+    }
+
+    private fun update(operationId: String, transform: (DurableOperationEntry) -> DurableOperationEntry): DurableOperationEntry {
+        val dir = directoryFor(operationId)
+        val current = readEntry(dir)
+        val updated = transform(current).copy(updatedAtEpochMillis = nowEpochMillis())
+        writeEntry(dir, updated)
+        return updated
+    }
+
+    /** Resolve a validated app-private media path and refuse symlinks/path escape. */
+    fun privateMediaFile(relativePath: String): File {
+        validateRelativeMediaPath(relativePath)
+        val base = mediaRoot?.canonicalFile ?: throw IOException("Dossier privé des médias indisponible.")
+        val candidate = File(base, relativePath).canonicalFile
+        val prefix = base.path.trimEnd(File.separatorChar) + File.separator
+        if (!candidate.path.startsWith(prefix)) throw IOException("Chemin média hors du dossier privé.")
+        return candidate
+    }
+
+    fun quarantineFile(operationId: String, photoId: String): File {
+        requireCanonicalUuid(operationId); requireCanonicalUuid(photoId)
+        val base = mediaRoot?.canonicalFile ?: throw IOException("Dossier privé des médias indisponible.")
+        val rootDir = File(base, QUARANTINE_DIRECTORY).canonicalFile
+        if (rootDir.parentFile != base) throw IOException("Dossier de quarantaine hors de l’espace privé autorisé.")
+        val opDir = File(rootDir, operationId).canonicalFile
+        if (opDir.parentFile != rootDir) throw IOException("Chemin de quarantaine non sûr.")
+        return File(opDir, "$photoId.media").canonicalFile.also {
+            if (it.parentFile != opDir) throw IOException("Chemin de quarantaine non sûr.")
+        }
+    }
+
+    fun cleanupPayloadArtifacts(operationId: String) {
+        val dir = directoryFor(operationId)
+        listOf(ARCHIVE_NAME, TARGET_NAME, MEDIA_DIRECTORY, "$ARCHIVE_NAME.part", "$TARGET_NAME.part", "$JOURNAL_NAME.part").forEach { name ->
+            val child = safeFile(dir, name)
+            if (child.isDirectory) child.deleteRecursively() else if (child.exists() && !child.delete()) throw IOException("Nettoyage impossible : ${child.name}.")
+        }
+    }
+
+    fun hasPayloadArtifacts(operationId: String): Boolean {
+        val dir = directoryFor(operationId)
+        return listOf(ARCHIVE_NAME, TARGET_NAME, MEDIA_DIRECTORY, "$ARCHIVE_NAME.part", "$TARGET_NAME.part", "$JOURNAL_NAME.part").any { safeFile(dir, it).exists() }
+    }
+
+    fun hasQuarantineArtifacts(operationId: String): Boolean {
+        requireCanonicalUuid(operationId)
+        val base = mediaRoot?.canonicalFile ?: throw IOException("Dossier privé des médias indisponible.")
+        val rootDir = File(base, QUARANTINE_DIRECTORY).canonicalFile
+        if (rootDir.parentFile != base) throw IOException("Dossier de quarantaine hors de l’espace privé autorisé.")
+        val opDir = File(rootDir, operationId).canonicalFile
+        if (opDir.parentFile != rootDir) throw IOException("Chemin de quarantaine non sûr.")
+        return opDir.exists()
+    }
+
+    fun cleanupQuarantine(operationId: String) {
+        requireCanonicalUuid(operationId)
+        val base = mediaRoot?.canonicalFile ?: throw IOException("Dossier privé des médias indisponible.")
+        val rootDir = File(base, QUARANTINE_DIRECTORY).canonicalFile
+        if (rootDir.parentFile != base) throw IOException("Dossier de quarantaine hors de l’espace privé autorisé.")
+        val opDir = File(rootDir, operationId).canonicalFile
+        if (opDir.parentFile == rootDir && opDir.exists() && !opDir.deleteRecursively()) throw IOException("Nettoyage de quarantaine impossible.")
+    }
+
     fun readAll(): List<DurableOperationEntry> {
         if (!root.exists()) return emptyList()
         if (!root.isDirectory) throw IOException("Le chemin du journal n’est pas un dossier.")
@@ -231,6 +305,8 @@ class DurableBackupOperationJournal(
             .put("updatedAtEpochMillis", entry.updatedAtEpochMillis)
             .put("lastError", entry.lastError ?: JSONObject.NULL)
             .put("mediaArtifacts", media)
+            .put("dataStoreFinalized", entry.dataStoreFinalized)
+            .put("finalizedMediaPhotoIds", JSONArray(entry.finalizedMediaPhotoIds.sorted()))
         writeAtomically(File(dir, JOURNAL_NAME), json.toString().toByteArray(StandardCharsets.UTF_8))
     }
 
@@ -239,9 +315,11 @@ class DurableBackupOperationJournal(
         if (!file.isFile) throw IOException("Journal absent ou incomplet dans ${dir.name}.")
         try {
             val json = JSONObject(String(readBounded(file, MAX_JOURNAL_BYTES), StandardCharsets.UTF_8))
-            val allowed = setOf("journalVersion", "operationId", "operationType", "selectedSets", "state", "archiveSha256", "localSnapshotSha256", "operationSha256", "targetFingerprint", "targetBundleSha256", "createdAtEpochMillis", "updatedAtEpochMillis", "lastError", "mediaArtifacts")
+            val version = json.getInt("journalVersion")
+            if (version !in 1..JOURNAL_VERSION) throw IOException("Version de journal non prise en charge.")
+            val baseKeys = setOf("journalVersion", "operationId", "operationType", "selectedSets", "state", "archiveSha256", "localSnapshotSha256", "operationSha256", "targetFingerprint", "targetBundleSha256", "createdAtEpochMillis", "updatedAtEpochMillis", "lastError", "mediaArtifacts")
+            val allowed = if (version == 1) baseKeys else baseKeys + setOf("dataStoreFinalized", "finalizedMediaPhotoIds")
             if (json.keys().asSequence().toSet() != allowed) throw IOException("Propriétés de journal manquantes ou inconnues.")
-            if (json.getInt("journalVersion") != JOURNAL_VERSION) throw IOException("Version de journal non prise en charge.")
             val operationId = json.getString("operationId")
             requireCanonicalUuid(operationId)
             if (dir.name != operationId) throw IOException("Identifiant de dossier différent du journal.")
@@ -267,7 +345,8 @@ class DurableBackupOperationJournal(
                 DurableMediaArtifact(photoId, sourcePath, stagedName, size, row.getString("sha256").requireHash())
             }
             if (mediaArtifacts.map { it.photoId }.distinct().size != mediaArtifacts.size) throw IOException("Identifiant de photo dupliqué dans le journal.")
-            return DurableOperationEntry(operationId, operationType, selected, state, archiveSha, localHash, operationHash, targetFingerprint, bundleHash, json.getLong("createdAtEpochMillis"), json.getLong("updatedAtEpochMillis"), error, mediaArtifacts)
+            val finalized = if (json.has("finalizedMediaPhotoIds")) json.getJSONArray("finalizedMediaPhotoIds").let { a -> (0 until a.length()).map { a.getString(it).also(::requireCanonicalUuid) }.toSet() } else emptySet()
+            return DurableOperationEntry(operationId, operationType, selected, state, archiveSha, localHash, operationHash, targetFingerprint, bundleHash, json.getLong("createdAtEpochMillis"), json.getLong("updatedAtEpochMillis"), error, mediaArtifacts, json.optBoolean("dataStoreFinalized", false), finalized)
         } catch (error: IOException) { throw error }
         catch (error: Exception) { throw IOException("Journal d’opération corrompu : ${error.message ?: "format invalide"}.", error) }
     }
@@ -429,7 +508,7 @@ class DurableBackupOperationJournal(
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it) }
 
     companion object {
-        const val JOURNAL_VERSION = 1
+        const val JOURNAL_VERSION = 2
         const val TARGET_FORMAT = "thesdupalais.target-state"
         const val MAX_TARGET_BYTES = 200L * 1024 * 1024
         const val MAX_JOURNAL_BYTES = 256L * 1024
@@ -437,5 +516,6 @@ class DurableBackupOperationJournal(
         const val ARCHIVE_NAME = "archive.zip"
         const val TARGET_NAME = "target-state.json"
         const val MEDIA_DIRECTORY = "media"
+        const val QUARANTINE_DIRECTORY = "backup-quarantine"
     }
 }
