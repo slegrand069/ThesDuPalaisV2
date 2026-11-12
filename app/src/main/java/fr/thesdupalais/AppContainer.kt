@@ -26,6 +26,7 @@ import fr.thesdupalais.data.operation.BackupOperationState
 import fr.thesdupalais.data.operation.RecoveryFinding
 import fr.thesdupalais.data.operation.RecoveryInspection
 import fr.thesdupalais.data.operation.BackupReplacementWorkflow
+import fr.thesdupalais.data.operation.BackupMergeWorkflow
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,6 +67,16 @@ class AppContainer(context: Context) : FirstRunOperations {
     val backupArchivePreviewReader = BackupArchivePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
     val backupArchiveMergePreviewReader = BackupArchiveMergePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
     val backupReplacementWorkflow = BackupReplacementWorkflow(
+        contentResolver = context.applicationContext.contentResolver,
+        exporter = backupArchiveExporter,
+        writeCoordinator = operationWriteCoordinator,
+        journal = operationJournal,
+        roomApplier = backupRoomOperationApplier,
+        finalizer = backupOperationFinalizer,
+        hasNoActiveMarker = { database.backupOperationMarkerDao().findActive() == null },
+        recoverPendingOperation = { recoverPendingOperation() },
+    )
+    val backupMergeWorkflow = BackupMergeWorkflow(
         contentResolver = context.applicationContext.contentResolver,
         exporter = backupArchiveExporter,
         writeCoordinator = operationWriteCoordinator,

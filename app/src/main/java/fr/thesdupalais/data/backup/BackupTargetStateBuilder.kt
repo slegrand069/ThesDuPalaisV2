@@ -220,9 +220,12 @@ object BackupTargetStateBuilder {
         } else {
             merge(request, plan!!, incomingTea, incomingConfig, payloads, changes, preserved, blockers)
         }
-        val targetTea = payloads["data/teas.json"]!!
+        var targetTea = payloads["data/teas.json"]!!
         val targetConfig = payloads["data/configuration.json"]!!
         reconcileAndCheck(targetTea, targetConfig, blockers)
+        runCatching { normalizeTeaDependencyReferences(targetTea, targetConfig) }
+            .onSuccess { targetTea = it; payloads["data/teas.json"] = it }
+            .onFailure { blockers += "Les dépendances de références des thés sont incohérentes : ${it.message ?: "références absentes"}." }
 
         val targetTeaIds = targetTea.array("teas").map { it.getString("id") }.toSet()
         val keptPhotos = request.photos.filter { it.teaId in targetTeaIds }.sortedWith(compareBy<TargetPhotoRecord> { it.teaId }.thenBy { it.position }.thenBy { it.id })
@@ -481,6 +484,45 @@ object BackupTargetStateBuilder {
         }
         val refs = payload.array("references").associateBy { it.getString("id") }
         toList().forEach { id -> refs[id]?.stringOrNull("parentCountryId")?.let(::add) }
+    }
+
+    /**
+     * Projects the full target catalog onto the exact dependency closure required by teas.json.
+     * Also used for forward recovery of already committed v1 targets prepared by the earlier
+     * builder, which accidentally copied the complete catalog into teas.json.
+     */
+    internal fun normalizeTeaDependencyReferences(teasPayload: JSONObject, configurationPayload: JSONObject): JSONObject {
+        val catalog = configurationPayload.array("references").associateBy { it.getString("id") }
+        val required = buildSet {
+            teasPayload.array("teas").forEach { tea ->
+                listOf("categoryId", "statusId", "containerId").forEach { tea.stringOrNull(it)?.let(::add) }
+                associations.forEach { addAll(tea.arrayStrings(it)) }
+            }
+            val pending = toMutableList()
+            while (pending.isNotEmpty()) {
+                val id = pending.removeAt(pending.lastIndex)
+                val reference = catalog[id] ?: throw IllegalArgumentException("référence $id absente de la configuration cible")
+                val parent = reference.stringOrNull("parentCountryId")
+                if (parent != null && add(parent)) pending += parent
+            }
+        }
+        val existing = teasPayload.array("references").associateBy { it.getString("id") }
+        existing.forEach { (id, definition) ->
+            val configured = catalog[id] ?: throw IllegalArgumentException("référence $id absente du catalogue de configuration")
+            if (canonical(definition) != canonical(configured)) {
+                throw IllegalArgumentException("définition de la référence $id différente entre thés et configuration")
+            }
+        }
+        required.forEach { id ->
+            val expected = catalog[id] ?: throw IllegalArgumentException("référence $id absente de la configuration cible")
+            if (existing[id] == null || canonical(existing.getValue(id)) != canonical(expected)) {
+                throw IllegalArgumentException("définition de la référence $id différente entre thés et configuration")
+            }
+        }
+        return JSONObject(teasPayload.toString()).put(
+            "references",
+            JSONArray(required.map { catalog.getValue(it) }.sortedWith(compareBy<JSONObject> { it.getString("kind") }.thenBy { it.getString("id") })),
+        )
     }
     private fun failed(r: BackupTargetRequest, errors: List<String>, archiveHash: String = sha(r.archiveBytes), localHash: String = "") = BackupTargetResult(null, emptyList(), emptyList(), emptyList(), errors, BackupTargetFingerprints(archiveHash, localHash, "", ""))
     private fun canonicalRequest(r: BackupTargetRequest, a: String, l: String, p: BackupArchiveMergePlan?) = buildString {

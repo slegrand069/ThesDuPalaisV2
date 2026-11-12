@@ -132,6 +132,47 @@ class BackupTargetStateBuilderTest {
         assertEquals(1, JSONObject(result.state.payloads.getValue("data/configuration.json")).getJSONArray("references").length())
     }
 
+    @Test fun mergeKeepsConfigurationCatalogCompleteButProjectsTeaPayloadToDependencies() {
+        val source = snapshot().copy(references = listOf(
+            reference(CATEGORY, "CATEGORY", "Catégorie"),
+            reference(UUID.fromString("123e4567-e89b-12d3-a456-426614174004"), "STATUS", "Référence non utilisée"),
+        ))
+        val local = archive(source, setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val incoming = archive(source, setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val plan = BackupArchiveMergePlanner.plan(incoming, local, setOf("teas", "configuration"))
+
+        val result = BackupTargetStateBuilder.build(BackupTargetRequest(
+            incoming, local, TargetOperation.MERGE, setOf("teas", "configuration"), planner = plan,
+        ))
+
+        assertTrue(result.blockers.toString(), result.applicable)
+        assertEquals(2, JSONObject(result.state!!.payloads.getValue("data/configuration.json")).getJSONArray("references").length())
+        val teaPayload = JSONObject(result.state.payloads.getValue("data/teas.json"))
+        assertEquals(1, teaPayload.getJSONArray("references").length())
+        assertEquals(CATEGORY.toString(), teaPayload.getJSONArray("references").getJSONObject(0).getString("id"))
+        assertTrue(BackupTargetStateBuilder.validatePreparedState(result.state).isEmpty())
+    }
+
+    @Test fun dependencyNormalizationAcceptsOnlyRedundantMatchingDefinitions() {
+        val used = "123e4567-e89b-12d3-a456-426614174001"
+        val unused = "123e4567-e89b-12d3-a456-426614174004"
+        val usedDefinition = JSONObject("""{"id":"$used","kind":"CATEGORY","label":"Catégorie"}""")
+        val unusedDefinition = JSONObject("""{"id":"$unused","kind":"STATUS","label":"Inutilisé"}""")
+        val teaPayload = JSONObject("""{"teas":[{"categoryId":"$used","statusId":null,"containerId":null,"countryIds":[],"regionIds":[],"aromaIds":[],"aromaticProfileIds":[],"momentIds":[],"badgeIds":[]}],"references":[${usedDefinition},${unusedDefinition}]}""")
+        val config = JSONObject("""{"references":[${usedDefinition},${unusedDefinition}]}""")
+
+        val normalized = BackupTargetStateBuilder.normalizeTeaDependencyReferences(teaPayload, config)
+        assertEquals(1, normalized.getJSONArray("references").length())
+        assertEquals(used, normalized.getJSONArray("references").getJSONObject(0).getString("id"))
+
+        val alteredTeaPayload = JSONObject(teaPayload.toString())
+        alteredTeaPayload.getJSONArray("references").getJSONObject(0).put("label", "Altérée")
+        assertTrue(runCatching { BackupTargetStateBuilder.normalizeTeaDependencyReferences(alteredTeaPayload, config) }.isFailure)
+
+        val missingRequired = JSONObject(teaPayload.toString()).put("references", org.json.JSONArray(listOf(unusedDefinition)))
+        assertTrue(runCatching { BackupTargetStateBuilder.normalizeTeaDependencyReferences(missingRequired, config) }.isFailure)
+    }
+
     @Test fun mergeAppliesOnlyConfirmedScalarAndPreservesNullValues() {
         val local = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
         val changed = snapshot().copy(teas = listOf(TeaEntity(TEA, 810, "Thé modifié", CATEGORY, null, null, null, null, null, null, null, null, null, null, null)))

@@ -117,9 +117,20 @@ class BackupOperationFinalizer(
     private suspend fun verifyTargetRoom(target: BackupTargetState) {
         val current = exporter.captureCurrentOperationSnapshot()
         val currentEntries = BackupArchiveValidator.validate(current.archiveBytes).entries
+        val targetConfiguration = JSONObject(target.payloads["data/configuration.json"]
+            ?: throw IOException("Configuration cible absente pendant la vérification Room."))
         target.payloads.forEach { (path, json) ->
             val actual = currentEntries[path] ?: throw IOException("Ensemble Room absent après application : $path.")
-            if (BackupTargetStateBuilder.canonicalJson(JSONObject(json)) !=
+            val expected = JSONObject(json).let { payload ->
+                if (path == "data/teas.json") {
+                    // Older prepared merge targets could carry the entire configuration catalog
+                    // in teas.json. Keep the persisted target and its fingerprint untouched, but
+                    // compare its exact tea dependency closure against Room for forward recovery.
+                    try { BackupTargetStateBuilder.normalizeTeaDependencyReferences(payload, targetConfiguration) }
+                    catch (error: Exception) { throw IOException("Dépendances de références de l’état cible invalides : ${error.message ?: "erreur"}.", error) }
+                } else payload
+            }
+            if (BackupTargetStateBuilder.canonicalJson(expected) !=
                 BackupTargetStateBuilder.canonicalJson(JSONObject(String(actual, Charsets.UTF_8)))) {
                 throw IOException("Les données Room ne correspondent pas à l’état cible : $path.")
             }
