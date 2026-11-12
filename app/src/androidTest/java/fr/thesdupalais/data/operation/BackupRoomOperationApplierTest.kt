@@ -217,6 +217,29 @@ class BackupRoomOperationApplierTest {
         assertEquals(BackupOperationState.ABORTED, journal.readAll().single().state)
     }
 
+    @Test fun recoveryBlocksWritesWhenCommittedRoomStateIsActuallyIncoherent() = runBlocking {
+        database.referenceDao().insert(reference(CATEGORY, "CATEGORY", "Catégorie"))
+        database.teaDao().insert(tea(OLD_TEA, 101, "État cible", CATEGORY))
+        val incoming = archive(BackupArchiveExporter.Snapshot(
+            references = listOf(reference(CATEGORY, "CATEGORY", "Catégorie")),
+            teas = listOf(tea(NEW_TEA, 202, "État cible", CATEGORY)),
+            countries = emptyList(), regions = emptyList(), aromas = emptyList(), profiles = emptyList(),
+            moments = emptyList(), badges = emptyList(), tastings = emptyList(), movements = emptyList(),
+        ), setOf(BackupExportSet.TEAS))
+        val prepared = prepare(incoming, TargetOperation.REPLACE, setOf("teas"), replacementConfirmed = true)
+        applier.apply(prepared.first, prepared.second)
+
+        database.teaDao().update(tea(NEW_TEA, 202, "Corruption simulée", CATEGORY))
+        val failure = runCatching { finalizer.finalize(prepared.first) }.exceptionOrNull()
+
+        assertTrue(failure?.message.orEmpty().contains("Les données Room ne correspondent pas à l’état cible"))
+        assertEquals("ROOM_COMMITTED", database.backupOperationMarkerDao().findActive()!!.state)
+        assertEquals(BackupOperationState.FINALIZING, journal.readAll().single().state)
+        assertTrue(journal.readPending().any { it.operationId == prepared.first })
+        val blockedWrite = runCatching { coordinator.withWritePermit { Unit } }.exceptionOrNull()
+        assertTrue(blockedWrite is BackupOperationPendingException)
+    }
+
     @Test fun configurationFinalizationIsAtomicIdempotentAndPreservesInstallationMarker() = runBlocking {
         preferences.markInstallationInitialized()
         val incoming = archive(BackupArchiveExporter.Snapshot(

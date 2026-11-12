@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import fr.thesdupalais.data.backup.BackupArchiveExporter
 import fr.thesdupalais.data.backup.BackupArchiveValidator
 import fr.thesdupalais.data.backup.BackupTargetState
+import fr.thesdupalais.data.backup.BackupTargetStateBuilder
 import fr.thesdupalais.data.backup.TargetPhotoRecord
 import fr.thesdupalais.data.database.AppDatabase
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
@@ -16,10 +17,9 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.first
-import org.json.JSONArray
 import org.json.JSONObject
 
-enum class FinalizationFaultPoint { AFTER_DATASTORE_EDIT_BEFORE_FLAG, AFTER_MEDIA_COPY_BEFORE_SOURCE_DELETE, AFTER_MEDIA_BEFORE_FLAG, AFTER_COMPLETE_BEFORE_MARKER_CLEAR }
+enum class FinalizationFaultPoint { BEFORE_DATASTORE_EDIT, AFTER_DATASTORE_EDIT_BEFORE_FLAG, AFTER_MEDIA_COPY_BEFORE_SOURCE_DELETE, AFTER_MEDIA_BEFORE_FLAG, AFTER_COMPLETE_BEFORE_MARKER_CLEAR }
 fun interface FinalizationFaultInjector { fun hit(point: FinalizationFaultPoint) }
 
 /** Forward-only completion after the Room marker. No user-facing restore/fusion entry point exists yet. */
@@ -75,6 +75,7 @@ class BackupOperationFinalizer(
         val currentPrefs = preferences.preferences.first()
         if ("configuration" in entry.selectedSets) {
             if (!entry.dataStoreFinalized) {
+                faultInjector.hit(FinalizationFaultPoint.BEFORE_DATASTORE_EDIT)
                 if (currentPrefs != expectedPrefs) preferences.setPreferencesForRecovery(operationId, expectedPrefs)
                 faultInjector.hit(FinalizationFaultPoint.AFTER_DATASTORE_EDIT_BEFORE_FLAG)
                 journal.markDataStoreFinalized(operationId)
@@ -118,7 +119,8 @@ class BackupOperationFinalizer(
         val currentEntries = BackupArchiveValidator.validate(current.archiveBytes).entries
         target.payloads.forEach { (path, json) ->
             val actual = currentEntries[path] ?: throw IOException("Ensemble Room absent après application : $path.")
-            if (canonical(JSONObject(json)) != canonical(JSONObject(String(actual, Charsets.UTF_8)))) {
+            if (BackupTargetStateBuilder.canonicalJson(JSONObject(json)) !=
+                BackupTargetStateBuilder.canonicalJson(JSONObject(String(actual, Charsets.UTF_8)))) {
                 throw IOException("Les données Room ne correspondent pas à l’état cible : $path.")
             }
         }
@@ -169,14 +171,6 @@ class BackupOperationFinalizer(
         val config = JSONObject(target.payloads["data/configuration.json"] ?: throw IOException("Configuration cible absente."))
         val prefs = config.getJSONObject("preferences")
         return UserPreferences(prefs.getLong("quantityPerCupMilliGrams"), prefs.getLong("lowStockThresholdMilliGrams"))
-    }
-
-    private fun canonical(value: Any?): String = when (value) {
-        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(prefix = "{", postfix = "}") { key -> JSONObject.quote(key) + ":" + canonical(value.get(key)) }
-        is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") { canonical(value.get(it)) }
-        JSONObject.NULL -> "null"
-        is String -> JSONObject.quote(value)
-        else -> value.toString()
     }
 
     private fun copyAndSync(source: File, destination: File) {

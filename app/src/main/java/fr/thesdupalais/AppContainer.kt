@@ -25,6 +25,7 @@ import fr.thesdupalais.data.operation.BackupOperationFinalizer
 import fr.thesdupalais.data.operation.BackupOperationState
 import fr.thesdupalais.data.operation.RecoveryFinding
 import fr.thesdupalais.data.operation.RecoveryInspection
+import fr.thesdupalais.data.operation.BackupReplacementWorkflow
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,6 +65,16 @@ class AppContainer(context: Context) : FirstRunOperations {
     )
     val backupArchivePreviewReader = BackupArchivePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
     val backupArchiveMergePreviewReader = BackupArchiveMergePreviewReader(context.applicationContext.contentResolver, backupArchiveExporter)
+    val backupReplacementWorkflow = BackupReplacementWorkflow(
+        contentResolver = context.applicationContext.contentResolver,
+        exporter = backupArchiveExporter,
+        writeCoordinator = operationWriteCoordinator,
+        journal = operationJournal,
+        roomApplier = backupRoomOperationApplier,
+        finalizer = backupOperationFinalizer,
+        hasNoActiveMarker = { database.backupOperationMarkerDao().findActive() == null },
+        recoverPendingOperation = { recoverPendingOperation() },
+    )
 
     override suspend fun initialize() {
         val recovery = recoverPendingOperation()
@@ -87,12 +98,25 @@ class AppContainer(context: Context) : FirstRunOperations {
             } else {
                 val entry = pending.singleOrNull()
                 if (entry != null) {
-                    if (entry.state !in setOf(BackupOperationState.PREPARING, BackupOperationState.PREPARED, BackupOperationState.ROOM_APPLYING)) {
-                        throw IllegalStateException("Le journal affirme un commit Room sans marqueur; récupération bloquée.")
-                    }
                     operationWriteCoordinator.withRecoveryPermit(entry.operationId) {
-                        operationJournal.cleanupPayloadArtifacts(entry.operationId)
-                        operationJournal.transition(entry.operationId, BackupOperationState.ABORTED, "Interruption avant validation Room; aucune donnée métier modifiée.")
+                        // Re-read both durable authorities after obtaining the exclusive permit;
+                        // an operation may have advanced while this startup check waited.
+                        val freshMarker = database.backupOperationMarkerDao().findActive()
+                        val freshEntry = operationJournal.readAll().singleOrNull { it.operationId == entry.operationId }
+                            ?: throw IllegalStateException("Journal disparu pendant la récupération.")
+                        if (freshMarker != null) {
+                            if (freshMarker.operationId != entry.operationId) throw IllegalStateException("Un autre marqueur Room est apparu; récupération bloquée.")
+                            backupOperationFinalizer.finalize(entry.operationId)
+                        } else if (freshEntry.state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED)) {
+                            operationJournal.cleanupQuarantine(entry.operationId)
+                            operationJournal.cleanupPayloadArtifacts(entry.operationId)
+                        } else {
+                            if (freshEntry.state !in setOf(BackupOperationState.PREPARING, BackupOperationState.PREPARED, BackupOperationState.ROOM_APPLYING)) {
+                                throw IllegalStateException("Le journal affirme un commit Room sans marqueur; récupération bloquée.")
+                            }
+                            operationJournal.cleanupPayloadArtifacts(entry.operationId)
+                            operationJournal.transition(entry.operationId, BackupOperationState.ABORTED, "Interruption avant validation Room; aucune donnée métier modifiée.")
+                        }
                     }
                 }
                 all.filter { it.state in setOf(BackupOperationState.COMPLETE, BackupOperationState.ABORTED) &&
@@ -105,7 +129,9 @@ class AppContainer(context: Context) : FirstRunOperations {
             }
             inspectPendingOperation()
         } catch (error: Exception) {
-            RecoveryInspection(RecoveryFinding.RECOVERY_FAILED, detail = "Récupération interrompue : ${error.message ?: error.javaClass.simpleName}. Les écritures restent bloquées.")
+            val current = runCatching { inspectPendingOperation() }.getOrNull()
+            if (current != null && !current.blocksWrites) current
+            else RecoveryInspection(RecoveryFinding.RECOVERY_FAILED, detail = "Récupération interrompue : ${error.message ?: error.javaClass.simpleName}. Les écritures restent bloquées.")
                 .also { recoveryStateMutable.value = it }
         }
     }

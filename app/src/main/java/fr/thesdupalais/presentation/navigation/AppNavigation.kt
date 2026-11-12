@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Card
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,7 +60,7 @@ import fr.thesdupalais.presentation.settings.SettingsViewModel
 import fr.thesdupalais.presentation.settings.SettingsViewModelFactory
 import fr.thesdupalais.presentation.settings.SettingsPreferencesSection
 import fr.thesdupalais.presentation.settings.BackupExportSection
-import fr.thesdupalais.presentation.settings.BackupPreviewSection
+import fr.thesdupalais.presentation.settings.BackupRestoreSection
 import fr.thesdupalais.presentation.settings.BackupMergePreviewSection
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
@@ -349,6 +350,7 @@ private fun KnowledgeScreen() {
 private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     val preferencesLoaded by viewModel.preferencesLoaded.collectAsStateWithLifecycle()
+    val recovery by container.recoveryInspection.collectAsStateWithLifecycle()
     Column(
         modifier = Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
@@ -383,9 +385,17 @@ private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer
         Spacer(Modifier.height(24.dp))
         Text("Import / Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
+        recovery?.takeIf { it.blocksWrites }?.let { state ->
+            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).testTag("backup-recovery-blocked")) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Une restauration doit être reprise", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                    Text(state.detail ?: "Les écritures sont temporairement suspendues pour protéger la collection.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         BackupExportSection(container.backupArchiveExporter)
         Spacer(Modifier.height(10.dp))
-        BackupPreviewSection(container.backupArchivePreviewReader)
+        BackupRestoreSection(container.backupReplacementWorkflow)
         Spacer(Modifier.height(10.dp))
         BackupMergePreviewSection(container.backupArchiveMergePreviewReader)
     }

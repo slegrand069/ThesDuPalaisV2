@@ -11,9 +11,19 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class BackupTargetStateBuilderTest {
+    @Test fun canonicalPayloadComparisonIgnoresArrayOrderingButPreservesMultiplicity() {
+        val ordered = JSONObject("""{"references":[{"id":"b"},{"id":"a"}]}""")
+        val reversed = JSONObject("""{"references":[{"id":"a"},{"id":"b"}]}""")
+        val duplicate = JSONObject("""{"references":[{"id":"a"},{"id":"a"},{"id":"b"}]}""")
+
+        assertEquals(BackupTargetStateBuilder.canonicalJson(ordered), BackupTargetStateBuilder.canonicalJson(reversed))
+        assertFalse(BackupTargetStateBuilder.canonicalJson(ordered) == BackupTargetStateBuilder.canonicalJson(duplicate))
+    }
+
     @Test fun replacementRequiresExplicitConfirmationAndKeepsUnselectedSets() {
         val snapshot = snapshot()
         val archive = archive(snapshot, setOf(BackupExportSet.CONFIGURATION))
@@ -26,6 +36,32 @@ class BackupTargetStateBuilderTest {
         assertTrue(result.applicable)
         assertEquals("*", result.preserved.single { it.set == "teas" }.identity)
         assertEquals(1, JSONObject(result.state!!.payloads.getValue("data/teas.json")).getJSONArray("teas").length())
+    }
+
+    @Test fun replacementPreviewPlansExactlyTheSelectedSetsWithoutApplyingAnything() {
+        val localBytes = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val incoming = archive(emptySnapshot(), setOf(BackupExportSet.CONFIGURATION))
+        val local = BackupLocalOperationSnapshot(localBytes, emptyList(), emptyList())
+
+        val configurationOnly = BackupReplacementPreviewPlanner.plan(incoming, local, setOf("configuration"))
+        assertTrue(configurationOnly.target.applicable)
+        assertEquals(setOf("configuration"), configurationOnly.selectedSets)
+        assertEquals(1, JSONObject(configurationOnly.target.state!!.payloads.getValue("data/teas.json")).getJSONArray("teas").length())
+
+        val changedSelection = BackupReplacementPreviewPlanner.plan(
+            archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION)), local, setOf("teas", "configuration"),
+        )
+        assertTrue(changedSelection.target.applicable)
+        assertEquals(setOf("teas", "configuration"), changedSelection.selectedSets)
+    }
+
+    @Test fun replacementPreviewRejectsArticlesAsAnApplicableSelection() {
+        val bytes = archive(emptySnapshot(), setOf(BackupExportSet.ARTICLES))
+        val localBytes = archive(emptySnapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val local = BackupLocalOperationSnapshot(localBytes, emptyList(), emptyList())
+        assertThrows(IllegalArgumentException::class.java) {
+            BackupReplacementPreviewPlanner.plan(bytes, local, setOf("articles"))
+        }
     }
 
     @Test fun replacementOfBothSetsCarriesStableIdsAndEmitsDeterministicFingerprints() {

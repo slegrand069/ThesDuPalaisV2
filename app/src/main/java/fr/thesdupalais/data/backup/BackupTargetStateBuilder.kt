@@ -501,7 +501,8 @@ object BackupTargetStateBuilder {
     private fun sha(text: String) = sha(text.toByteArray(StandardCharsets.UTF_8))
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     private fun obj(a: BackupArchiveValidator.ValidatedArchive, path: String) = a.entries[path]?.let { JSONObject(String(it, StandardCharsets.UTF_8)) }
-    private fun canonicalJson(o: JSONObject) = canonical(o)
+    /** Canonical representation shared by fingerprints and post-application verification. */
+    internal fun canonicalJson(o: JSONObject) = canonical(o)
     private fun canonical(v: Any?): String = when (v) {
         is JSONObject -> v.keys().asSequence().sorted().joinToString(separator = ",", prefix = "{", postfix = "}") { "${JSONObject.quote(it)}:${canonical(v.opt(it))}" }
         // Every array in the v1 tea/configuration payload is a set of rows or associations.
