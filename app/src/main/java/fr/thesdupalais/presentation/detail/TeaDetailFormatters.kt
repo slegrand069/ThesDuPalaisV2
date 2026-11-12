@@ -1,5 +1,6 @@
 package fr.thesdupalais.presentation.detail
 
+import fr.thesdupalais.domain.quantity.formatGrams
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.ZoneId
@@ -15,10 +16,10 @@ internal fun formatTastingDateTime(
     .format(Instant.ofEpochMilli(occurredAtEpochMillis))
 
 internal fun formatConsumedQuantity(milliGrams: Long): String =
-    BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',') + " g"
+    formatGrams(milliGrams) + " g"
 
 internal fun formatStockQuantity(milliGrams: Long): String =
-    BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',') + " g"
+    formatGrams(milliGrams) + " g"
 
 internal fun formatDetailRating(rating: Double): String {
     val value = BigDecimal.valueOf(rating)

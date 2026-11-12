@@ -20,11 +20,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -34,20 +42,34 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import fr.thesdupalais.domain.quantity.formatGrams
+import fr.thesdupalais.domain.quantity.parseCupCount
+import fr.thesdupalais.domain.quantity.parseOptionalGramsMilliGrams
+import fr.thesdupalais.domain.quantity.totalConsumedMilliGrams
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 @Composable
 fun TeaDetailScreen(viewModel: TeaDetailViewModel, onBack: () -> Unit, onEdit: (UUID) -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    TeaDetailContent(state, onBack, onEdit)
+    val gramsPerCupMilli by viewModel.gramsPerCupMilli.collectAsStateWithLifecycle()
+    TeaDetailContent(state, onBack, onEdit, gramsPerCupMilli, viewModel::recordConsumedTasting)
 }
 
 @Composable
-internal fun TeaDetailContent(state: TeaDetailUiState, onBack: () -> Unit, onEdit: (UUID) -> Unit = {}) {
+internal fun TeaDetailContent(
+    state: TeaDetailUiState,
+    onBack: () -> Unit,
+    onEdit: (UUID) -> Unit = {},
+    defaultGramsPerCupMilli: Long = 7_000L,
+    onRecordTasting: suspend (Long) -> Unit = {},
+) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         DetailHeader(
             onBack = onBack,
@@ -66,7 +88,12 @@ internal fun TeaDetailContent(state: TeaDetailUiState, onBack: () -> Unit, onEdi
                     Text("Ce thé n’est pas disponible dans le catalogue.", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
-            is TeaDetailUiState.Content -> TeaDetailBody(state, Modifier.weight(1f))
+            is TeaDetailUiState.Content -> TeaDetailBody(
+                state,
+                Modifier.weight(1f),
+                defaultGramsPerCupMilli,
+                onRecordTasting,
+            )
         }
     }
 }
@@ -116,8 +143,19 @@ private fun DetailHeader(onBack: () -> Unit, onEdit: () -> Unit, enabled: Boolea
 }
 
 @Composable
-private fun TeaDetailBody(state: TeaDetailUiState.Content, modifier: Modifier = Modifier) {
+private fun TeaDetailBody(
+    state: TeaDetailUiState.Content,
+    modifier: Modifier = Modifier,
+    defaultGramsPerCupMilli: Long,
+    onRecordTasting: suspend (Long) -> Unit,
+) {
     val tea = state.tea
+    val scope = rememberCoroutineScope()
+    var showConsumptionDialog by remember(tea.id) { mutableStateOf(false) }
+    var gramsPerCupInput by remember(tea.id) { mutableStateOf(formatGrams(defaultGramsPerCupMilli)) }
+    var cupCountInput by remember(tea.id) { mutableStateOf("1") }
+    var consumptionError by remember(tea.id) { mutableStateOf<String?>(null) }
+    var recordingTasting by remember(tea.id) { mutableStateOf(false) }
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -155,6 +193,15 @@ private fun TeaDetailBody(state: TeaDetailUiState.Content, modifier: Modifier = 
                 color = if (state.tea.stockMilliGrams == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Button(
+                onClick = {
+                    gramsPerCupInput = formatGrams(defaultGramsPerCupMilli)
+                    cupCountInput = "1"
+                    consumptionError = null
+                    showConsumptionDialog = true
+                },
+                modifier = Modifier.fillMaxWidth().testTag("tea-detail-drink"),
+            ) { Text("J’en bois un !") }
         }
 
         DetailCard(Modifier.testTag("tea-detail-tasting-notes")) {
@@ -231,6 +278,66 @@ private fun TeaDetailBody(state: TeaDetailUiState.Content, modifier: Modifier = 
                 }
             }
         }
+    }
+
+    if (showConsumptionDialog) {
+        AlertDialog(
+            modifier = Modifier.testTag("tea-drink-dialog"),
+            onDismissRequest = { if (!recordingTasting) showConsumptionDialog = false },
+            title = { Text("Enregistrer une dégustation") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = gramsPerCupInput,
+                        onValueChange = { gramsPerCupInput = it; consumptionError = null },
+                        label = { Text("Grammes par tasse") },
+                        suffix = { Text("g") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("tea-drink-grams-input"),
+                    )
+                    OutlinedTextField(
+                        value = cupCountInput,
+                        onValueChange = { cupCountInput = it; consumptionError = null },
+                        label = { Text("Nombre de tasses") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("tea-drink-cups-input"),
+                    )
+                    consumptionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !recordingTasting,
+                    modifier = Modifier.testTag("tea-drink-confirm"),
+                    onClick = {
+                        val consumed = runCatching {
+                            val grams = requireNotNull(parseOptionalGramsMilliGrams(gramsPerCupInput)) {
+                                "Saisissez le grammage par tasse."
+                            }
+                            require(grams > 0) { "Le grammage par tasse doit être supérieur à zéro." }
+                            totalConsumedMilliGrams(grams, parseCupCount(cupCountInput))
+                        }.onFailure { consumptionError = it.message ?: "La quantité saisie est invalide." }
+                            .getOrNull() ?: return@Button
+                        recordingTasting = true
+                        scope.launch {
+                            runCatching { onRecordTasting(consumed) }
+                                .onSuccess { showConsumptionDialog = false }
+                                .onFailure { consumptionError = it.message ?: "La dégustation n’a pas pu être enregistrée." }
+                            recordingTasting = false
+                        }
+                    },
+                ) { Text(if (recordingTasting) "Enregistrement…" else "J’en bois un !") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !recordingTasting,
+                    onClick = { showConsumptionDialog = false },
+                    modifier = Modifier.testTag("tea-drink-cancel"),
+                ) { Text("Annuler") }
+            },
+        )
     }
 }
 

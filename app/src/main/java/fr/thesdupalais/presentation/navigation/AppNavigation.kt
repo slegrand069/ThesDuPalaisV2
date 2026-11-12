@@ -81,6 +81,7 @@ import fr.thesdupalais.presentation.articles.ArticleDetailScreen
 import fr.thesdupalais.presentation.articles.ArticleDetailViewModel
 import fr.thesdupalais.presentation.articles.ArticleDetailViewModelFactory
 import java.util.UUID
+import kotlinx.coroutines.flow.map
 
 private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
 internal const val TEA_EDIT_ROUTE = "tea/{teaId}/edit"
@@ -273,6 +274,8 @@ fun AppNavigation(container: AppContainer) {
                             teaId,
                             container.database.teaDao(),
                             container.database.tastingDao(),
+                            container.teaRepository,
+                            container.preferences.preferences.map { it.gramsPerCupMilli },
                         ),
                     )
                     TeaDetailScreen(

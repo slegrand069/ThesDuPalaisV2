@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import fr.thesdupalais.presentation.theme.ThesDuPalaisTheme
 import java.time.ZoneId
@@ -118,6 +120,31 @@ class TeaDetailScreenTest {
 
         assertTextExists("0 g")
         composeRule.onAllNodesWithText("Non renseigné").assertCountEquals(0)
+    }
+
+    @Test fun drinkActionUsesEnteredDoseAndCupCountForOneTasting() {
+        var recordedQuantity: Long? = null
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail(), emptyList()),
+                    onBack = {},
+                    defaultGramsPerCupMilli = 7_000L,
+                    onRecordTasting = { recordedQuantity = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-detail-drink").performClick()
+        composeRule.onNodeWithTag("tea-drink-grams-input").performTextClearance()
+        composeRule.onNodeWithTag("tea-drink-grams-input").performTextInput("2,5")
+        composeRule.onNodeWithTag("tea-drink-cups-input").performTextClearance()
+        composeRule.onNodeWithTag("tea-drink-cups-input").performTextInput("2")
+        composeRule.onNodeWithTag("tea-drink-confirm").performClick()
+        composeRule.waitUntil(3_000) { recordedQuantity != null }
+
+        org.junit.Assert.assertEquals(5_000L, recordedQuantity)
+        composeRule.onAllNodesWithTag("tea-drink-dialog").assertCountEquals(0)
     }
 
     private fun detail() = TeaDetail(

@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import fr.thesdupalais.data.database.NewTea
 import fr.thesdupalais.data.database.TeaRepository
 import fr.thesdupalais.data.database.TeaEditableField
+import fr.thesdupalais.domain.quantity.formatGrams
+import fr.thesdupalais.domain.quantity.parseOptionalGramsMilliGrams
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceValue
 import java.util.UUID
@@ -245,7 +247,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
             return
         }
         val stockMilliGrams = try {
-            parseStockInput(current.stockInput)
+            parseOptionalGramsMilliGrams(current.stockInput)
         } catch (_: Exception) {
             _uiState.update { it.copy(error = "Saisissez un stock positif ou nul, avec au plus trois décimales.") }
             return
@@ -304,21 +306,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
         if (selected) this + id else this - id
 }
 
-private fun formatStockInput(milliGrams: Long): String =
-    java.math.BigDecimal.valueOf(milliGrams, 3).stripTrailingZeros().toPlainString().replace('.', ',')
-
-internal fun parseStockInput(input: String): Long? {
-    val text = input.trim()
-    if (text.isEmpty()) return null
-    require(text.matches(Regex("(?:\\d+(?:[,.]\\d{0,3})?|[,.]\\d{1,3})"))) { "Format de stock invalide." }
-    val grams = java.math.BigDecimal(text.replace(',', '.'))
-    require(grams.signum() >= 0) { "Le stock ne peut pas être négatif." }
-    return try {
-        grams.movePointRight(3).longValueExact()
-    } catch (error: ArithmeticException) {
-        throw IllegalArgumentException("Le stock est trop élevé.", error)
-    }
-}
+private fun formatStockInput(milliGrams: Long): String = formatGrams(milliGrams)
 
 class TeaFormViewModelFactory(
     private val repository: TeaRepository,

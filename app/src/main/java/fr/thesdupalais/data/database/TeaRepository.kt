@@ -47,6 +47,34 @@ class TeaRepository(
     private val database: AppDatabase,
     private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
 ) {
+    /** Records one tasting and updates a known stock atomically. Unknown stock remains unknown. */
+    suspend fun recordConsumedTasting(teaId: UUID, consumedMilliGrams: Long): UUID =
+        writeCoordinator.withWritePermit {
+            require(consumedMilliGrams > 0) { "La quantité consommée doit être supérieure à zéro." }
+            val now = System.currentTimeMillis()
+            database.withTransaction {
+                val tea = database.teaDao().findActiveById(teaId)
+                    ?: throw IllegalStateException("Ce thé n’est plus disponible dans la collection.")
+                val tastingId = UUID.randomUUID()
+                tea.stockMilliGrams?.let { stock ->
+                    val remaining = (stock - consumedMilliGrams).coerceAtLeast(0L)
+                    check(database.teaDao().updateStock(teaId, remaining) == 1) {
+                        "Le stock du thé n’a pas pu être mis à jour."
+                    }
+                }
+                database.tastingDao().insert(
+                    TastingEntity(
+                        id = tastingId,
+                        teaId = teaId,
+                        occurredAtEpochMillis = now,
+                        recordedAtEpochMillis = now,
+                        consumedMilliGrams = consumedMilliGrams,
+                    ),
+                )
+                tastingId
+            }
+        }
+
     fun observeSelectableReferences(kind: ReferenceKind): Flow<List<ReferenceValue>> =
         database.referenceDao().observeSelectableByKind(kind.name).map { references ->
             references.map(ReferenceEntity::toDomain)

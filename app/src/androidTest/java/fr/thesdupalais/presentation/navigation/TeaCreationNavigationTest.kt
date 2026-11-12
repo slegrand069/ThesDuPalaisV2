@@ -117,7 +117,12 @@ class TeaCreationNavigationTest {
                         val id = java.util.UUID.fromString(requireNotNull(entry.arguments?.getString("teaId")))
                         val vm: TeaDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
                             key = "detail-$id",
-                            factory = TeaDetailViewModelFactory(id, database.teaDao(), database.tastingDao()),
+                            factory = TeaDetailViewModelFactory(
+                                id,
+                                database.teaDao(),
+                                database.tastingDao(),
+                                TeaRepository(database),
+                            ),
                         )
                         TeaDetailScreen(vm, onBack = {}, onEdit = { navController.navigate("tea/$it/edit") })
                     }

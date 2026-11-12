@@ -7,12 +7,15 @@ import fr.thesdupalais.data.database.ReferenceEntity
 import fr.thesdupalais.data.database.TastingDao
 import fr.thesdupalais.data.database.TastingEntity
 import fr.thesdupalais.data.database.TeaDao
+import fr.thesdupalais.data.database.TeaRepository
 import fr.thesdupalais.data.database.TeaWithDetailData
+import fr.thesdupalais.data.preferences.UserPreferences
 import fr.thesdupalais.presentation.catalogue.formatOrigins
 import java.util.UUID
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
 data class TeaDetail(
@@ -44,7 +47,19 @@ sealed interface TeaDetailUiState {
     data class Content(val tea: TeaDetail, val tastings: List<TeaTasting>) : TeaDetailUiState
 }
 
-class TeaDetailViewModel(teaId: UUID, teaDao: TeaDao, tastingDao: TastingDao) : ViewModel() {
+class TeaDetailViewModel(
+    private val teaId: UUID,
+    teaDao: TeaDao,
+    tastingDao: TastingDao,
+    private val teaRepository: TeaRepository,
+    gramsPerCupMilli: kotlinx.coroutines.flow.Flow<Long> = flowOf(UserPreferences.DEFAULT_GRAMS_PER_CUP_MILLI),
+) : ViewModel() {
+    val gramsPerCupMilli = gramsPerCupMilli.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
+        UserPreferences.DEFAULT_GRAMS_PER_CUP_MILLI,
+    )
+
     val state = combine(
         teaDao.observeActiveDetail(teaId),
         tastingDao.observeForTea(teaId),
@@ -58,17 +73,23 @@ class TeaDetailViewModel(teaId: UUID, teaDao: TeaDao, tastingDao: TastingDao) : 
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), TeaDetailUiState.Loading)
+
+    suspend fun recordConsumedTasting(consumedMilliGrams: Long) {
+        teaRepository.recordConsumedTasting(teaId, consumedMilliGrams)
+    }
 }
 
 class TeaDetailViewModelFactory(
     private val teaId: UUID,
     private val teaDao: TeaDao,
     private val tastingDao: TastingDao,
+    private val teaRepository: TeaRepository,
+    private val gramsPerCupMilli: kotlinx.coroutines.flow.Flow<Long> = flowOf(UserPreferences.DEFAULT_GRAMS_PER_CUP_MILLI),
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(TeaDetailViewModel::class.java.isAssignableFrom(modelClass))
-        return TeaDetailViewModel(teaId, teaDao, tastingDao) as T
+        return TeaDetailViewModel(teaId, teaDao, tastingDao, teaRepository, gramsPerCupMilli) as T
     }
 }
 
