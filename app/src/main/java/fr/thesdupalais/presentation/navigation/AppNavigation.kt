@@ -30,6 +30,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -73,6 +74,12 @@ import fr.thesdupalais.presentation.detail.TeaDetailViewModelFactory
 import fr.thesdupalais.presentation.teaform.TeaFormScreen
 import fr.thesdupalais.presentation.teaform.TeaFormViewModel
 import fr.thesdupalais.presentation.teaform.TeaFormViewModelFactory
+import fr.thesdupalais.presentation.articles.ArticlesScreen
+import fr.thesdupalais.presentation.articles.ArticlesViewModel
+import fr.thesdupalais.presentation.articles.ArticlesViewModelFactory
+import fr.thesdupalais.presentation.articles.ArticleDetailScreen
+import fr.thesdupalais.presentation.articles.ArticleDetailViewModel
+import fr.thesdupalais.presentation.articles.ArticleDetailViewModelFactory
 import java.util.UUID
 
 private const val TEA_DETAIL_ROUTE = "tea/{teaId}"
@@ -81,6 +88,7 @@ internal const val TEA_CREATE_ROUTE = "tea/create"
 private const val REFERENCE_LIST_ROUTE = "references/{kind}"
 private const val REFERENCE_CREATE_ROUTE = "references/{kind}/create"
 private const val REFERENCE_EDIT_ROUTE = "references/{kind}/edit/{referenceId}"
+private const val ARTICLE_DETAIL_ROUTE = "savoirs/article/{articleId}"
 
 private enum class MainDestination(val route: String, val label: String, val icon: String) {
     CATALOGUE("catalogue", "Catalogue", "catalogue"),
@@ -112,6 +120,7 @@ fun AppNavigation(container: AppContainer) {
                 Row(modifier = Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
                     MainDestination.entries.forEach { destination ->
                         val selected = currentDestination?.hierarchy?.any { it.route == destination.route } == true ||
+                            (destination == MainDestination.KNOWLEDGE && currentDestination?.route?.startsWith("savoirs") == true) ||
                             (destination == MainDestination.SETTINGS && currentDestination?.route?.startsWith("references/") == true)
                         Column(
                             modifier = Modifier.weight(1f).fillMaxSize()
@@ -158,7 +167,38 @@ fun AppNavigation(container: AppContainer) {
             }
             teaCreationDestination(navController, container.teaRepository)
             teaEditingDestination(navController, container.teaRepository)
-            composable(MainDestination.KNOWLEDGE.route) { KnowledgeScreen() }
+            composable(MainDestination.KNOWLEDGE.route) {
+                val context = LocalContext.current.applicationContext
+                val articlesViewModel: ArticlesViewModel = viewModel(
+                    factory = ArticlesViewModelFactory(
+                        container.articleRepository,
+                        container.articleJsonImporter,
+                        context.contentResolver,
+                    ),
+                )
+                ArticlesScreen(articlesViewModel) { articleId ->
+                    navController.navigate("savoirs/article/$articleId")
+                }
+            }
+            composable(
+                route = ARTICLE_DETAIL_ROUTE,
+                arguments = listOf(navArgument("articleId") { type = NavType.StringType }),
+            ) { entry ->
+                val articleId = entry.arguments?.getString("articleId")?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                val onBack = {
+                    if (!navController.popBackStack()) navController.navigate(MainDestination.KNOWLEDGE.route)
+                }
+                if (articleId == null) {
+                    ArticleDetailScreen(fr.thesdupalais.presentation.articles.ArticleDetailState.Unavailable, onBack)
+                } else {
+                    val detailViewModel: ArticleDetailViewModel = viewModel(
+                        key = "article-detail-$articleId",
+                        factory = ArticleDetailViewModelFactory(container.articleRepository, articleId),
+                    )
+                    val detailState by detailViewModel.state.collectAsStateWithLifecycle()
+                    ArticleDetailScreen(detailState, onBack)
+                }
+            }
             composable(MainDestination.SETTINGS.route) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModelFactory(container.preferences),
@@ -329,20 +369,6 @@ private fun BottomNavigationIcon(kind: String, selected: Boolean) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun KnowledgeScreen() {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 20.dp),
-    ) {
-        ScreenTitle("Savoirs", "Conseils et notes autour du thé")
-        Spacer(Modifier.height(32.dp))
-        EmptyState(
-            title = "Aucun article pour le moment",
-            message = "Vos articles de savoirs apparaîtront ici.",
-        )
     }
 }
 

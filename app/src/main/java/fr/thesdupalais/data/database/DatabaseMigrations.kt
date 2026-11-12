@@ -127,3 +127,18 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         db.execSQL("ALTER TABLE `imported_datasets` ADD COLUMN `isSuperseded` INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/** Adds standalone knowledge articles without changing any existing business data. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `articles` (
+                `id` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `category` TEXT NOT NULL,
+                `markdown` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )""",
+        )
+    }
+}

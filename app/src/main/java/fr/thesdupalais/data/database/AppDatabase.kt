@@ -7,6 +7,7 @@ import androidx.room.TypeConverters
 @Database(
     entities = [
         ReferenceEntity::class,
+        ArticleEntity::class,
         TeaEntity::class,
         TeaCountryEntity::class,
         TeaRegionEntity::class,
@@ -20,12 +21,13 @@ import androidx.room.TypeConverters
         ImportedDatasetEntity::class,
         BackupOperationMarkerEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun referenceDao(): ReferenceDao
+    abstract fun articleDao(): ArticleDao
     abstract fun teaDao(): TeaDao
     abstract fun tastingDao(): TastingDao
     abstract fun stockMovementDao(): StockMovementDao
