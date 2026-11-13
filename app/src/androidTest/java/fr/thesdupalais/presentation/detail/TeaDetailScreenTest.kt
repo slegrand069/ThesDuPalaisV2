@@ -11,12 +11,15 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import fr.thesdupalais.presentation.theme.ThesDuPalaisTheme
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 
@@ -145,6 +148,82 @@ class TeaDetailScreenTest {
 
         org.junit.Assert.assertEquals(5_000L, recordedQuantity)
         composeRule.onAllNodesWithTag("tea-drink-dialog").assertCountEquals(0)
+    }
+
+    @Test fun manualTastingAcceptsHistoricalDateTimeAndEnteredQuantity() {
+        var recorded: Pair<Long, Long>? = null
+        val expectedTime = parseTastingDateTimeInput("31/12/2025", "23:45", ZoneId.systemDefault())
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail(), emptyList()),
+                    onBack = {},
+                    defaultGramsPerCupMilli = 7_000L,
+                    onRecordManualTasting = { occurredAt, quantity -> recorded = occurredAt to quantity },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-tasting-add").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-manual-date-input").performTextClearance()
+        composeRule.onNodeWithTag("tea-manual-date-input").performTextInput("31/12/2025")
+        composeRule.onNodeWithTag("tea-manual-time-input").performTextClearance()
+        composeRule.onNodeWithTag("tea-manual-time-input").performTextInput("23:45")
+        composeRule.onNodeWithTag("tea-manual-grams-input").performTextClearance()
+        composeRule.onNodeWithTag("tea-manual-grams-input").performTextInput("2,5")
+        composeRule.onNodeWithTag("tea-manual-cups-input").performTextClearance()
+        composeRule.onNodeWithTag("tea-manual-cups-input").performTextInput("3")
+        composeRule.onNodeWithTag("tea-manual-confirm").performClick()
+        composeRule.waitUntil(3_000) { recorded != null }
+
+        assertEquals(expectedTime to 7_500L, recorded)
+        composeRule.onAllNodesWithTag("tea-manual-tasting-dialog").assertCountEquals(0)
+    }
+
+    @Test fun tastingDeletionCanBeCancelledOrConfirmedForTheSelectedEntry() {
+        val tastingId = UUID.randomUUID()
+        val occurredAt = ZonedDateTime.of(2026, 3, 12, 9, 15, 0, 0, ZoneId.of("Europe/Paris")).toInstant().toEpochMilli()
+        var deletedId: UUID? = null
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail(), listOf(TeaTasting(tastingId, occurredAt, 3_500L))),
+                    onBack = {},
+                    onDeleteTasting = { deletedId = it; true },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-tasting-delete-$tastingId").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-tasting-delete-dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("tea-tasting-delete-cancel").performClick()
+        assertNull(deletedId)
+        composeRule.onAllNodesWithTag("tea-tasting-delete-dialog").assertCountEquals(0)
+
+        composeRule.onNodeWithTag("tea-tasting-delete-$tastingId").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-tasting-delete-confirm").performClick()
+        composeRule.waitUntil(3_000) { deletedId != null }
+        assertEquals(tastingId, deletedId)
+        composeRule.onAllNodesWithTag("tea-tasting-delete-dialog").assertCountEquals(0)
+    }
+
+    @Test fun failedTastingDeletionKeepsConfirmationAndShowsAnError() {
+        val tastingId = UUID.randomUUID()
+        val occurredAt = ZonedDateTime.of(2026, 3, 12, 9, 15, 0, 0, ZoneId.of("Europe/Paris")).toInstant().toEpochMilli()
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail(), listOf(TeaTasting(tastingId, occurredAt, 3_500L))),
+                    onBack = {},
+                    onDeleteTasting = { false },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-tasting-delete-$tastingId").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-tasting-delete-confirm").performClick()
+        composeRule.onNodeWithText("Cette dégustation n’est plus disponible.").assertIsDisplayed()
+        composeRule.onNodeWithTag("tea-tasting-delete-dialog").assertIsDisplayed()
     }
 
     private fun detail() = TeaDetail(

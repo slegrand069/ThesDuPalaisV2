@@ -77,6 +77,12 @@ class TeaDetailViewModel(
     suspend fun recordConsumedTasting(consumedMilliGrams: Long) {
         teaRepository.recordConsumedTasting(teaId, consumedMilliGrams)
     }
+
+    suspend fun recordTasting(occurredAtEpochMillis: Long, consumedMilliGrams: Long) {
+        teaRepository.recordTasting(teaId, occurredAtEpochMillis, consumedMilliGrams)
+    }
+
+    suspend fun deleteTasting(tastingId: UUID): Boolean = teaRepository.deleteTasting(teaId, tastingId)
 }
 
 class TeaDetailViewModelFactory(

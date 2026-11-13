@@ -13,6 +13,24 @@ class TeaDetailFormattersTest {
         assertEquals("1 novembre 2026 à 14:30", formatTastingDateTime(instant, ZoneId.of("Europe/Paris"), Locale.FRANCE))
     }
 
+    @Test fun parsesEditableHistoricalTastingDateAndTimeInLocalZone() {
+        val zone = ZoneId.of("Europe/Paris")
+        val expected = ZonedDateTime.of(2025, 12, 31, 23, 45, 0, 0, zone).toInstant().toEpochMilli()
+
+        assertEquals(expected, parseTastingDateTimeInput("31/12/2025", "23:45", zone))
+        assertEquals("31/12/2025", formatTastingDateInput(expected, zone))
+        assertEquals("23:45", formatTastingTimeInput(expected, zone))
+    }
+
+    @Test fun rejectsInvalidHistoricalTastingDateAndTime() {
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            parseTastingDateTimeInput("31/02/2025", "12:00", ZoneId.of("Europe/Paris"))
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            parseTastingDateTimeInput("31/12/2025", "25:00", ZoneId.of("Europe/Paris"))
+        }
+    }
+
     @Test fun formatsKnownConsumedQuantityAndNullableRatingsWithoutRounding() {
         assertEquals("1,25 g", formatConsumedQuantity(1_250L))
         assertEquals("7 g", formatConsumedQuantity(7_000L))

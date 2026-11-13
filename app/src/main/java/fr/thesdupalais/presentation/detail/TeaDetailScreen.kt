@@ -59,7 +59,15 @@ import kotlinx.coroutines.launch
 fun TeaDetailScreen(viewModel: TeaDetailViewModel, onBack: () -> Unit, onEdit: (UUID) -> Unit = {}) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val gramsPerCupMilli by viewModel.gramsPerCupMilli.collectAsStateWithLifecycle()
-    TeaDetailContent(state, onBack, onEdit, gramsPerCupMilli, viewModel::recordConsumedTasting)
+    TeaDetailContent(
+        state,
+        onBack,
+        onEdit,
+        gramsPerCupMilli,
+        viewModel::recordConsumedTasting,
+        viewModel::recordTasting,
+        viewModel::deleteTasting,
+    )
 }
 
 @Composable
@@ -69,6 +77,8 @@ internal fun TeaDetailContent(
     onEdit: (UUID) -> Unit = {},
     defaultGramsPerCupMilli: Long = 7_000L,
     onRecordTasting: suspend (Long) -> Unit = {},
+    onRecordManualTasting: suspend (Long, Long) -> Unit = { _, _ -> },
+    onDeleteTasting: suspend (UUID) -> Boolean = { false },
 ) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         DetailHeader(
@@ -93,6 +103,8 @@ internal fun TeaDetailContent(
                 Modifier.weight(1f),
                 defaultGramsPerCupMilli,
                 onRecordTasting,
+                onRecordManualTasting,
+                onDeleteTasting,
             )
         }
     }
@@ -148,6 +160,8 @@ private fun TeaDetailBody(
     modifier: Modifier = Modifier,
     defaultGramsPerCupMilli: Long,
     onRecordTasting: suspend (Long) -> Unit,
+    onRecordManualTasting: suspend (Long, Long) -> Unit,
+    onDeleteTasting: suspend (UUID) -> Boolean,
 ) {
     val tea = state.tea
     val scope = rememberCoroutineScope()
@@ -156,6 +170,16 @@ private fun TeaDetailBody(
     var cupCountInput by remember(tea.id) { mutableStateOf("1") }
     var consumptionError by remember(tea.id) { mutableStateOf<String?>(null) }
     var recordingTasting by remember(tea.id) { mutableStateOf(false) }
+    var showManualTastingDialog by remember(tea.id) { mutableStateOf(false) }
+    var manualDateInput by remember(tea.id) { mutableStateOf("") }
+    var manualTimeInput by remember(tea.id) { mutableStateOf("") }
+    var manualGramsInput by remember(tea.id) { mutableStateOf("") }
+    var manualCupCountInput by remember(tea.id) { mutableStateOf("1") }
+    var manualTastingError by remember(tea.id) { mutableStateOf<String?>(null) }
+    var recordingManualTasting by remember(tea.id) { mutableStateOf(false) }
+    var tastingToDelete by remember(tea.id) { mutableStateOf<TeaTasting?>(null) }
+    var deletingTasting by remember(tea.id) { mutableStateOf(false) }
+    var deletionError by remember(tea.id) { mutableStateOf<String?>(null) }
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -264,19 +288,38 @@ private fun TeaDetailBody(
             } else {
                 state.tastings.forEachIndexed { index, tasting ->
                     if (index > 0) Spacer(Modifier.height(6.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            formatTastingDateTime(tasting.occurredAtEpochMillis),
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        tasting.consumedMilliGrams?.let { amount ->
-                            Text("Quantité consommée · ${formatConsumedQuantity(amount)}", style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                formatTastingDateTime(tasting.occurredAtEpochMillis),
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            tasting.consumedMilliGrams?.let { amount ->
+                                Text("Quantité consommée · ${formatConsumedQuantity(amount)}", style = MaterialTheme.typography.bodySmall)
+                            }
                         }
+                        TextButton(
+                            onClick = { tastingToDelete = tasting; deletionError = null },
+                            enabled = !deletingTasting,
+                            modifier = Modifier.testTag("tea-tasting-delete-${tasting.id}"),
+                        ) { Text("Supprimer") }
                     }
                 }
             }
+            Button(
+                onClick = {
+                    val now = System.currentTimeMillis()
+                    manualDateInput = formatTastingDateInput(now)
+                    manualTimeInput = formatTastingTimeInput(now)
+                    manualGramsInput = formatGrams(defaultGramsPerCupMilli)
+                    manualCupCountInput = "1"
+                    manualTastingError = null
+                    showManualTastingDialog = true
+                },
+                modifier = Modifier.fillMaxWidth().testTag("tea-tasting-add"),
+            ) { Text("Ajouter une dégustation") }
         }
     }
 
@@ -335,6 +378,122 @@ private fun TeaDetailBody(
                     enabled = !recordingTasting,
                     onClick = { showConsumptionDialog = false },
                     modifier = Modifier.testTag("tea-drink-cancel"),
+                ) { Text("Annuler") }
+            },
+        )
+    }
+
+    if (showManualTastingDialog) {
+        AlertDialog(
+            modifier = Modifier.testTag("tea-manual-tasting-dialog"),
+            onDismissRequest = { if (!recordingManualTasting) showManualTastingDialog = false },
+            title = { Text("Ajouter une dégustation oubliée") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = manualDateInput,
+                        onValueChange = { manualDateInput = it; manualTastingError = null },
+                        label = { Text("Date (jj/mm/aaaa)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("tea-manual-date-input"),
+                    )
+                    OutlinedTextField(
+                        value = manualTimeInput,
+                        onValueChange = { manualTimeInput = it; manualTastingError = null },
+                        label = { Text("Heure (hh:mm)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("tea-manual-time-input"),
+                    )
+                    OutlinedTextField(
+                        value = manualGramsInput,
+                        onValueChange = { manualGramsInput = it; manualTastingError = null },
+                        label = { Text("Grammes par tasse") },
+                        suffix = { Text("g") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("tea-manual-grams-input"),
+                    )
+                    OutlinedTextField(
+                        value = manualCupCountInput,
+                        onValueChange = { manualCupCountInput = it; manualTastingError = null },
+                        label = { Text("Nombre de tasses") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("tea-manual-cups-input"),
+                    )
+                    manualTastingError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !recordingManualTasting,
+                    modifier = Modifier.testTag("tea-manual-confirm"),
+                    onClick = {
+                        val entry = runCatching {
+                            val occurredAt = parseTastingDateTimeInput(manualDateInput, manualTimeInput)
+                            val grams = requireNotNull(parseOptionalGramsMilliGrams(manualGramsInput)) {
+                                "Saisissez le grammage par tasse."
+                            }
+                            require(grams > 0) { "Le grammage par tasse doit être supérieur à zéro." }
+                            occurredAt to totalConsumedMilliGrams(grams, parseCupCount(manualCupCountInput))
+                        }.onFailure { manualTastingError = it.message ?: "Les valeurs saisies sont invalides." }
+                            .getOrNull() ?: return@Button
+                        recordingManualTasting = true
+                        scope.launch {
+                            runCatching { onRecordManualTasting(entry.first, entry.second) }
+                                .onSuccess { showManualTastingDialog = false }
+                                .onFailure { manualTastingError = it.message ?: "La dégustation n’a pas pu être ajoutée." }
+                            recordingManualTasting = false
+                        }
+                    },
+                ) { Text(if (recordingManualTasting) "Enregistrement…" else "Ajouter") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !recordingManualTasting,
+                    onClick = { showManualTastingDialog = false },
+                    modifier = Modifier.testTag("tea-manual-cancel"),
+                ) { Text("Annuler") }
+            },
+        )
+    }
+
+    tastingToDelete?.let { tasting ->
+        AlertDialog(
+            modifier = Modifier.testTag("tea-tasting-delete-dialog"),
+            onDismissRequest = { if (!deletingTasting) tastingToDelete = null },
+            title = { Text("Supprimer cette dégustation ?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Dégustation du ${formatTastingDateTime(tasting.occurredAtEpochMillis)}.")
+                    tasting.consumedMilliGrams?.let { Text("Quantité : ${formatConsumedQuantity(it)}") }
+                    Text("Le stock connu sera réajusté si une quantité consommée est enregistrée.")
+                    deletionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !deletingTasting,
+                    onClick = {
+                        deletingTasting = true
+                        scope.launch {
+                            runCatching { onDeleteTasting(tasting.id) }
+                                .onSuccess { deleted ->
+                                    if (deleted) tastingToDelete = null
+                                    else deletionError = "Cette dégustation n’est plus disponible."
+                                }
+                                .onFailure { deletionError = it.message ?: "La dégustation n’a pas pu être supprimée." }
+                            deletingTasting = false
+                        }
+                    },
+                    modifier = Modifier.testTag("tea-tasting-delete-confirm"),
+                ) { Text(if (deletingTasting) "Suppression…" else "Supprimer") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !deletingTasting,
+                    onClick = { tastingToDelete = null },
+                    modifier = Modifier.testTag("tea-tasting-delete-cancel"),
                 ) { Text("Annuler") }
             },
         )

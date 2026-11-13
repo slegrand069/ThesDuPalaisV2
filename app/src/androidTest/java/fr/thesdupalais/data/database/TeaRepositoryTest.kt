@@ -180,6 +180,52 @@ class TeaRepositoryTest {
         assertEquals(0, database.tastingDao().count())
     }
 
+    @Test fun recordsHistoricalTastingAndDeletesItRestoringKnownStock() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Dégustation oubliée", category.id, stockMilliGrams = 20_000L))
+        val occurredAt = 1_700_000_000_000L
+        val tastingId = repository.recordTasting(teaId, occurredAt, 7_500L)
+
+        val tasting = requireNotNull(database.tastingDao().findForTea(tastingId, teaId))
+        assertEquals(occurredAt, tasting.occurredAtEpochMillis)
+        assertEquals(7_500L, tasting.consumedMilliGrams)
+        assertEquals(12_500L, database.teaDao().findById(teaId)?.stockMilliGrams)
+
+        assertTrue(repository.deleteTasting(teaId, tastingId))
+        assertNull(database.tastingDao().findForTea(tastingId, teaId))
+        assertEquals(20_000L, database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals(0, database.stockMovementDao().count())
+    }
+
+    @Test fun deletingTastingPreservesUnknownStockAndMissingTastingReturnsFalse() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Stock inconnu", category.id))
+        val tastingId = repository.recordTasting(teaId, 1_700_000_000_000L, 7_000L)
+
+        assertTrue(repository.deleteTasting(teaId, tastingId))
+        assertNull(database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals(0, database.tastingDao().count())
+        assertTrue(!repository.deleteTasting(teaId, tastingId))
+    }
+
+    @Test fun deletingTastingRespectsBlockedWriteCoordinator() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Verrouillé", category.id, stockMilliGrams = 10_000L))
+        val tastingId = repository.recordTasting(teaId, 1_700_000_000_000L, 3_000L)
+        val blockedRepository = TeaRepository(
+            database,
+            BackupOperationWriteCoordinator {
+                RecoveryInspection(RecoveryFinding.RECOVERY_FAILED, detail = "Écriture bloquée pour test.")
+            },
+        )
+
+        val failure = runCatching { blockedRepository.deleteTasting(teaId, tastingId) }.exceptionOrNull()
+
+        assertTrue(failure is BackupOperationPendingException)
+        assertEquals(7_000L, database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertNotNull(database.tastingDao().findForTea(tastingId, teaId))
+    }
+
     @Test fun rejectsWrongReferenceTypeAndInvalidNumbersBeforeWriting() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
         val aroma = reference(ReferenceKind.AROMA, "Aroma")

@@ -3,8 +3,13 @@ package fr.thesdupalais.presentation.detail
 import fr.thesdupalais.domain.quantity.formatGrams
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
+import java.time.DateTimeException
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.ResolverStyle
 import java.util.Locale
 
 internal fun formatTastingDateTime(
@@ -14,6 +19,36 @@ internal fun formatTastingDateTime(
 ): String = DateTimeFormatter.ofPattern("d MMMM yyyy 'à' HH:mm", locale)
     .withZone(zoneId)
     .format(Instant.ofEpochMilli(occurredAtEpochMillis))
+
+internal fun formatTastingDateInput(
+    occurredAtEpochMillis: Long,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): String = DateTimeFormatter.ofPattern("dd/MM/uuuu")
+    .withZone(zoneId)
+    .format(Instant.ofEpochMilli(occurredAtEpochMillis))
+
+internal fun formatTastingTimeInput(
+    occurredAtEpochMillis: Long,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): String = DateTimeFormatter.ofPattern("HH:mm")
+    .withZone(zoneId)
+    .format(Instant.ofEpochMilli(occurredAtEpochMillis))
+
+internal fun parseTastingDateTimeInput(
+    dateInput: String,
+    timeInput: String,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): Long {
+    val dateFormatter = DateTimeFormatter.ofPattern("dd/MM/uuuu").withResolverStyle(ResolverStyle.STRICT)
+    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm").withResolverStyle(ResolverStyle.STRICT)
+    return try {
+        val date = LocalDate.parse(dateInput.trim(), dateFormatter)
+        val time = LocalTime.parse(timeInput.trim(), timeFormatter)
+        LocalDateTime.of(date, time).atZone(zoneId).toInstant().toEpochMilli()
+    } catch (error: DateTimeException) {
+        throw IllegalArgumentException("Saisissez une date au format jj/mm/aaaa et une heure au format hh:mm.", error)
+    }
+}
 
 internal fun formatConsumedQuantity(milliGrams: Long): String =
     formatGrams(milliGrams) + " g"

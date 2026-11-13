@@ -49,9 +49,13 @@ class TeaRepository(
 ) {
     /** Records one tasting and updates a known stock atomically. Unknown stock remains unknown. */
     suspend fun recordConsumedTasting(teaId: UUID, consumedMilliGrams: Long): UUID =
+        recordTasting(teaId, System.currentTimeMillis(), consumedMilliGrams)
+
+    /** Records a tasting at its occurrence time while preserving the actual recording time. */
+    suspend fun recordTasting(teaId: UUID, occurredAtEpochMillis: Long, consumedMilliGrams: Long): UUID =
         writeCoordinator.withWritePermit {
             require(consumedMilliGrams > 0) { "La quantité consommée doit être supérieure à zéro." }
-            val now = System.currentTimeMillis()
+            val recordedAt = System.currentTimeMillis()
             database.withTransaction {
                 val tea = database.teaDao().findActiveById(teaId)
                     ?: throw IllegalStateException("Ce thé n’est plus disponible dans la collection.")
@@ -66,12 +70,40 @@ class TeaRepository(
                     TastingEntity(
                         id = tastingId,
                         teaId = teaId,
-                        occurredAtEpochMillis = now,
-                        recordedAtEpochMillis = now,
+                        occurredAtEpochMillis = occurredAtEpochMillis,
+                        recordedAtEpochMillis = recordedAt,
                         consumedMilliGrams = consumedMilliGrams,
                     ),
                 )
                 tastingId
+            }
+        }
+
+    /** Deletes one tasting and returns its known consumed amount to a known current stock. */
+    suspend fun deleteTasting(teaId: UUID, tastingId: UUID): Boolean =
+        writeCoordinator.withWritePermit {
+            database.withTransaction {
+                val tasting = database.tastingDao().findForTea(tastingId, teaId) ?: return@withTransaction false
+                val consumed = tasting.consumedMilliGrams?.takeIf { it > 0 }
+                if (consumed != null) {
+                    val tea = database.teaDao().findById(teaId)
+                        ?: throw IllegalStateException("La fiche du thé n’est plus disponible.")
+                    val stock = tea.stockMilliGrams
+                    if (stock != null) {
+                        val restored = try {
+                            Math.addExact(stock, consumed)
+                        } catch (_: ArithmeticException) {
+                            Long.MAX_VALUE
+                        }
+                        check(database.teaDao().updateStock(teaId, restored) == 1) {
+                            "Le stock du thé n’a pas pu être mis à jour."
+                        }
+                    }
+                }
+                check(database.tastingDao().deleteForTea(tastingId, teaId) == 1) {
+                    "La dégustation n’a pas pu être supprimée."
+                }
+                true
             }
         }
 

@@ -251,6 +251,9 @@ interface TastingDao {
     @Query("SELECT * FROM tastings WHERE teaId = :teaId ORDER BY occurredAtEpochMillis DESC, recordedAtEpochMillis DESC, id DESC")
     fun observeForTea(teaId: UUID): Flow<List<TastingEntity>>
 
+    @Query("SELECT * FROM tastings WHERE id = :tastingId AND teaId = :teaId LIMIT 1")
+    suspend fun findForTea(tastingId: UUID, teaId: UUID): TastingEntity?
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(tasting: TastingEntity)
 
@@ -260,6 +263,9 @@ interface TastingDao {
     /** Call within a transaction that also recalculates any later stock movements for this tea. */
     @Query("DELETE FROM tastings WHERE id = :id")
     suspend fun delete(id: UUID)
+
+    @Query("DELETE FROM tastings WHERE id = :tastingId AND teaId = :teaId")
+    suspend fun deleteForTea(tastingId: UUID, teaId: UUID): Int
 }
 
 @Dao
