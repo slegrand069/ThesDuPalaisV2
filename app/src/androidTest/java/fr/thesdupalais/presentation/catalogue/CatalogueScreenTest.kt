@@ -3,6 +3,7 @@ package fr.thesdupalais.presentation.catalogue
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -63,15 +64,16 @@ class CatalogueScreenTest {
         assertEquals(id, selectedTeaId)
     }
 
-    @Test fun showsMadjoUnavailableAndKeepsTheTypedRequest() {
+    @Test fun showsMadjoRequestWithoutUnavailableLabel() {
         composeRule.setContent {
             ThesDuPalaisTheme {
-                CatalogueContent(CatalogueUiState.Content(emptyList(), CatalogueCriteria(query = "  MAdJo aide"), madjoRequest = true))
+                CatalogueContent(CatalogueUiState.Content(emptyList(), CatalogueCriteria(query = "  MAdJo aide"), madjoRequest = true, madjoRequestText = "  MAdJo aide"))
             }
         }
         composeRule.onNodeWithTag("catalogue-search").assertIsDisplayed()
         composeRule.onNodeWithTag("catalogue-search").assertTextEquals("  MAdJo aide")
-        composeRule.onNodeWithText("Madjo sera bientôt disponible").assertIsDisplayed()
+        composeRule.onNodeWithText("Madjo sera bientôt disponible").assertDoesNotExist()
+        composeRule.onNodeWithText("  MAdJo aide").assertIsDisplayed()
         composeRule.onAllNodesWithText("Sencha").assertCountEquals(0)
     }
 

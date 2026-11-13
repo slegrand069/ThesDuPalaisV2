@@ -58,6 +58,8 @@ fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit
         onTeaSelected = onTeaSelected,
         onAddTea = onAddTea,
         onQueryChange = viewModel::setQuery,
+        onSubmitQuery = viewModel::submitQuery,
+        onDismissMadjo = viewModel::dismissMadjo,
         onCategoriesChange = viewModel::setCategories,
         onCountriesChange = viewModel::setCountries,
         onStatusesChange = viewModel::setStatuses,
@@ -77,6 +79,8 @@ internal fun CatalogueContent(
     onTeaSelected: (UUID) -> Unit = {},
     onAddTea: () -> Unit = {},
     onQueryChange: (String) -> Unit = {},
+    onSubmitQuery: () -> Unit = {},
+    onDismissMadjo: () -> Unit = {},
     onCategoriesChange: (Set<UUID>) -> Unit = {},
     onCountriesChange: (Set<UUID>) -> Unit = {},
     onStatusesChange: (Set<UUID>, Boolean) -> Unit = { _, _ -> },
@@ -91,6 +95,9 @@ internal fun CatalogueContent(
     val criteria = when (state) { is CatalogueUiState.Content -> state.criteria; is CatalogueUiState.Empty -> state.criteria; else -> CatalogueCriteria() }
     val options = when (state) { is CatalogueUiState.Content -> state.options; is CatalogueUiState.Empty -> state.options; else -> CatalogueFilterOptions() }
     var showFilters by remember { mutableStateOf(false) }
+    val madjoRequest = when (state) { is CatalogueUiState.Content -> state.madjoRequest; is CatalogueUiState.Empty -> state.madjoRequest; else -> false }
+    val madjoDetected = containsMadjoInvocation(criteria.query)
+    val madjoRequestText = when (state) { is CatalogueUiState.Content -> state.madjoRequestText; is CatalogueUiState.Empty -> state.madjoRequestText; else -> null }
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
@@ -102,8 +109,7 @@ internal fun CatalogueContent(
         )
         Text("Ma collection de thés", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(24.dp))
-        val madjoRequest = when (state) { is CatalogueUiState.Content -> state.madjoRequest; is CatalogueUiState.Empty -> state.madjoRequest; else -> false }
-        CatalogueSearchControls(criteria, onQueryChange, { showFilters = true }, onResetAll, madjoRequest)
+        CatalogueSearchControls(criteria, onQueryChange, onSubmitQuery, { showFilters = true }, onResetAll, madjoRequest)
         if (criteria.hasFilters) {
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("catalogue-active-filters"),
@@ -123,14 +129,13 @@ internal fun CatalogueContent(
         when (state) {
             CatalogueUiState.Loading -> CircularProgressIndicator(modifier = Modifier.testTag("catalogue-loading"))
             is CatalogueUiState.Empty -> Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (state.madjoRequest) Text("Madjo sera bientôt disponible", modifier = Modifier.align(androidx.compose.ui.Alignment.Center).testTag("catalogue-madjo-unavailable"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
-                else CatalogueEmptyState(Modifier.align(androidx.compose.ui.Alignment.Center))
+                if (!state.madjoRequest) CatalogueEmptyState(Modifier.align(androidx.compose.ui.Alignment.Center))
                 AddTeaButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp), onAddTea)
             }
             is CatalogueUiState.Content -> Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
-                    state.madjoRequest -> Text("Madjo sera bientôt disponible", modifier = Modifier.padding(16.dp).testTag("catalogue-madjo-unavailable"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
-                    state.noResults -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.madjoRequest -> Unit
+                    state.noResults && !madjoDetected -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Aucun thé ne correspond à ces critères.", modifier = Modifier.testTag("catalogue-no-results"), style = MaterialTheme.typography.titleMedium)
                         TextButton(onClick = onResetAll) { Text("Réinitialiser") }
                     }
@@ -149,10 +154,47 @@ internal fun CatalogueContent(
         options, criteria, { showFilters = false }, onCategoriesChange, onCountriesChange, onStatusesChange,
         onProfilesChange, onBadgesChange, onContainersChange, onMomentsChange, onTasteRatingChange, onResetFilters,
     )
+    if (madjoRequest && madjoRequestText != null) {
+        MadjoDialog(
+            initialRequest = madjoRequestText,
+            onDismiss = onDismissMadjo,
+        )
+    }
 }
 
 @Composable
-private fun CatalogueSearchControls(criteria: CatalogueCriteria, onQueryChange: (String) -> Unit, showFilters: () -> Unit, resetAll: () -> Unit, madjoRequest: Boolean) {
+private fun MadjoDialog(initialRequest: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(38.dp)) {
+                    Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        Text("M", color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text("Madjo")
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Text(initialRequest, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+                Text("Madjo prépare ses questions…", style = MaterialTheme.typography.bodyMedium)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
+        modifier = Modifier.testTag("madjo-dialog"),
+    )
+}
+
+@Composable
+private fun CatalogueSearchControls(criteria: CatalogueCriteria, onQueryChange: (String) -> Unit, onSubmitQuery: () -> Unit, showFilters: () -> Unit, resetAll: () -> Unit, madjoRequest: Boolean) {
     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface) {
             Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -162,6 +204,8 @@ private fun CatalogueSearchControls(criteria: CatalogueCriteria, onQueryChange: 
                     value = criteria.query,
                     onValueChange = onQueryChange,
                     modifier = Modifier.weight(1f).testTag("catalogue-search"),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSubmitQuery() }),
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                     decorationBox = { inner ->

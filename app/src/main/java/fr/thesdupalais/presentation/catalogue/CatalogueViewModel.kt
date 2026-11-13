@@ -62,13 +62,14 @@ data class CatalogueFilterOptions(
 
 sealed interface CatalogueUiState {
     data object Loading : CatalogueUiState
-    data class Empty(val criteria: CatalogueCriteria = CatalogueCriteria(), val options: CatalogueFilterOptions = CatalogueFilterOptions(), val madjoRequest: Boolean = false) : CatalogueUiState
+    data class Empty(val criteria: CatalogueCriteria = CatalogueCriteria(), val options: CatalogueFilterOptions = CatalogueFilterOptions(), val madjoRequest: Boolean = false, val madjoRequestText: String? = null) : CatalogueUiState
     data class Content(
         val teas: List<CatalogueTea>,
         val criteria: CatalogueCriteria = CatalogueCriteria(),
         val options: CatalogueFilterOptions = CatalogueFilterOptions(),
         val madjoRequest: Boolean = false,
         val noResults: Boolean = false,
+        val madjoRequestText: String? = null,
     ) : CatalogueUiState
 }
 
@@ -79,9 +80,14 @@ enum class TasteRatingFilter(val label: String) {
 
 class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     private val criteria = MutableStateFlow(CatalogueCriteria())
+    private val madjoRequestText = MutableStateFlow<String?>(null)
     val currentCriteria get() = criteria.value
 
     fun setQuery(query: String) { criteria.value = criteria.value.copy(query = query) }
+    fun submitQuery() {
+        madjoRequestText.value = criteria.value.query.takeIf(::containsMadjoInvocation)
+    }
+    fun dismissMadjo() { madjoRequestText.value = null }
     fun setCategories(ids: Set<UUID>) { criteria.value = criteria.value.copy(categoryIds = ids) }
     fun setCountries(ids: Set<UUID>) { criteria.value = criteria.value.copy(countryIds = ids) }
     fun setStatuses(ids: Set<UUID>, includeUnspecified: Boolean) {
@@ -96,15 +102,14 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
         categoryIds = emptySet(), countryIds = emptySet(), statusIds = emptySet(), includeUnspecifiedStatus = false,
         aromaticProfileIds = emptySet(), badgeIds = emptySet(), containerIds = emptySet(), momentIds = emptySet(), tasteRating = TasteRatingFilter.ALL,
     ) }
-    fun resetAll() { criteria.value = CatalogueCriteria() }
+    fun resetAll() { criteria.value = CatalogueCriteria(); madjoRequestText.value = null }
 
-    val state = combine(teaDao.observeActiveCatalog(), criteria) { rows, current ->
+    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoRequestText) { rows, current, submittedMadjoRequest ->
         val allTeas = rows.map(TeaWithCatalogData::toCatalogueTea)
         val options = rows.toFilterOptions()
-        if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, routeCatalogueQuery(current.query) == CatalogueQueryRoute.MADJO)
-        val route = routeCatalogueQuery(current.query)
-        if (route == CatalogueQueryRoute.MADJO) {
-            return@combine CatalogueUiState.Content(emptyList(), current, options, madjoRequest = true)
+        if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, submittedMadjoRequest != null, submittedMadjoRequest)
+        if (submittedMadjoRequest != null) {
+            return@combine CatalogueUiState.Content(emptyList(), current, options, madjoRequest = true, madjoRequestText = submittedMadjoRequest)
         }
         val visible = allTeas.filter { tea -> matchesCatalogueTea(tea, current) }
         CatalogueUiState.Content(visible, current, options, noResults = visible.isEmpty())
@@ -121,10 +126,38 @@ class CatalogueViewModelFactory(private val teaDao: TeaDao) : ViewModelProvider.
 
 enum class CatalogueQueryRoute { CLASSIC, MADJO }
 
-private val MADJO_PREFIX = Regex("^\\s*(?:madjo|majdo|majo|mado)(?=$|\\s|\\p{P})", RegexOption.IGNORE_CASE)
-
 internal fun routeCatalogueQuery(query: String): CatalogueQueryRoute =
-    if (MADJO_PREFIX.containsMatchIn(query)) CatalogueQueryRoute.MADJO else CatalogueQueryRoute.CLASSIC
+    if (containsMadjoInvocation(query)) CatalogueQueryRoute.MADJO else CatalogueQueryRoute.CLASSIC
+
+/** Matches a standalone name (or a one-edit typo) after accent and punctuation normalization. */
+internal fun containsMadjoInvocation(query: String): Boolean =
+    normalizeCatalogueSearch(query).split(' ').any { token ->
+        token == "madjo" || token == "majdo" ||
+            levenshteinDistanceAtMostOne(token, "madjo") || levenshteinDistanceAtMostOne(token, "majdo")
+    }
+
+private fun levenshteinDistanceAtMostOne(left: String, right: String): Boolean {
+    if (left.isEmpty() || kotlin.math.abs(left.length - right.length) > 1) return false
+    if (left.length == right.length) {
+        return left.indices.count { left[it] != right[it] } <= 1
+    }
+    val shorter = if (left.length < right.length) left else right
+    val longer = if (left.length < right.length) right else left
+    var shortIndex = 0
+    var longIndex = 0
+    var skipped = false
+    while (shortIndex < shorter.length && longIndex < longer.length) {
+        if (shorter[shortIndex] == longer[longIndex]) {
+            shortIndex++
+            longIndex++
+        } else {
+            if (skipped) return false
+            skipped = true
+            longIndex++
+        }
+    }
+    return true
+}
 
 internal fun normalizeCatalogueSearch(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
     .replace(Regex("\\p{Mn}+"), "")
@@ -134,7 +167,6 @@ internal fun normalizeCatalogueSearch(value: String): String = Normalizer.normal
     .replace(Regex("\\s+"), " ")
 
 internal fun matchesCatalogueTea(tea: CatalogueTea, criteria: CatalogueCriteria): Boolean {
-    if (routeCatalogueQuery(criteria.query) == CatalogueQueryRoute.MADJO) return true
     if (!matchesAny(criteria.categoryIds, setOf(tea.categoryId))) return false
     if (!matchesAny(criteria.countryIds, tea.countryIds)) return false
     if (!matchesAny(criteria.aromaticProfileIds, tea.aromaticProfileIds)) return false

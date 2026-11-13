@@ -22,13 +22,28 @@ class CatalogueSearchTest {
         searchableFields = listOf("Thé du matin", "Thé vert", "Japon", "Uji", "Jasmin", "Floral"),
     )
 
-    @Test fun madjoAliasesRouteOnlyAtStartAsCompleteWords() {
-        listOf("Madjo", "  MADJO aide", "Majdo: choix", "mAjO?", "MADO, aide-moi").forEach {
+    @Test fun madjoAliasesRouteAnywhereWithCaseAccentPunctuationAndSmallTypos() {
+        listOf(
+            "Madjo, conseille-moi un thé floral",
+            "Dis-moi Majdo, que boire ce soir ?",
+            "Pour ce soir, Madjo, tu proposes quoi ?",
+            "  MADJO aide", "Majdo: choix", "mAjO?", "MADO, aide-moi", "Madjó, aide-moi", "Madjoo, aide-moi",
+        ).forEach {
             assertEquals(it, CatalogueQueryRoute.MADJO, routeCatalogueQuery(it))
         }
-        listOf("Madjolina", "thé madjo", "Madjoka", "Madoya").forEach {
+    }
+
+    @Test fun madjoDetectionDoesNotMatchOrdinaryWordsContainingSimilarLetters() {
+        listOf("Madjolina", "Madjoka", "Madoya", "thé majordome", "un thé floral").forEach {
             assertEquals(it, CatalogueQueryRoute.CLASSIC, routeCatalogueQuery(it))
         }
+    }
+
+    @Test fun madjoRequestTextIsPreservedVerbatimInCriteria() {
+        val request = "Pour ce soir, MADJO, tu proposes quoi ?"
+        val criteria = CatalogueCriteria(query = request)
+        assertEquals(request, criteria.query)
+        assertEquals(CatalogueQueryRoute.MADJO, routeCatalogueQuery(criteria.query))
     }
 
     @Test fun searchIgnoresCaseAccentsAndExtraSpacesAndMatchesWordsAcrossFields() {
@@ -36,9 +51,8 @@ class CatalogueSearchTest {
         assertTrue(matchesCatalogueTea(collectionTea, CatalogueCriteria(query = "floral uji")))
         assertTrue(matchesCatalogueTea(collectionTea, CatalogueCriteria(query = "THÉ, JAPÓN!")))
         assertFalse(matchesCatalogueTea(collectionTea, CatalogueCriteria(query = "thé absent")))
-        assertEquals(CatalogueQueryRoute.CLASSIC, routeCatalogueQuery("thé madjo"))
-        val madjoTea = collectionTea.copy(searchableFields = collectionTea.searchableFields + "Madjo")
-        assertTrue(matchesCatalogueTea(madjoTea, CatalogueCriteria(query = "thé madjo")))
+        assertEquals(CatalogueQueryRoute.CLASSIC, routeCatalogueQuery("thé matin"))
+        assertFalse(matchesCatalogueTea(collectionTea, CatalogueCriteria(query = "thé madjo")))
     }
 
     @Test fun filtersUseOrWithinEachGroupAndAndBetweenGroups() {
