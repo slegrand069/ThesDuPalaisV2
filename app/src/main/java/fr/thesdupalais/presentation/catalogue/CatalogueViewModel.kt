@@ -8,7 +8,17 @@ import fr.thesdupalais.data.database.TeaDao
 import fr.thesdupalais.data.database.TeaWithCatalogData
 import fr.thesdupalais.domain.madjo.MadjoConversationEngine
 import fr.thesdupalais.domain.madjo.MadjoConversationState
+import fr.thesdupalais.domain.madjo.MadjoInvocation
+import fr.thesdupalais.domain.madjo.MadjoCriterion
 import fr.thesdupalais.domain.madjo.MadjoQuestionId
+import fr.thesdupalais.domain.madjo.MadjoRecommendationCriteria
+import fr.thesdupalais.domain.madjo.MadjoRecommendationEngine
+import fr.thesdupalais.domain.madjo.MadjoRecommendationOutcome
+import fr.thesdupalais.domain.madjo.MadjoReference
+import fr.thesdupalais.domain.madjo.MadjoTeaProfile
+import fr.thesdupalais.domain.madjo.MadjoVocabulary
+import fr.thesdupalais.domain.model.ReferenceValue
+import fr.thesdupalais.domain.references.StandardReferenceSeeds
 import java.text.Normalizer
 import java.util.Locale
 import java.util.UUID
@@ -29,10 +39,17 @@ data class CatalogueTea(
     val tasteRating: Double?,
     val statusId: UUID? = null,
     val searchableFields: List<String> = listOf(name, category) + origins,
+    val regionIds: Set<UUID> = emptySet(),
+    val aromaIds: Set<UUID> = emptySet(),
     val aromaticProfileIds: Set<UUID> = emptySet(),
     val badgeIds: Set<UUID> = emptySet(),
     val containerId: UUID? = null,
     val momentIds: Set<UUID> = emptySet(),
+    val countryRefs: List<MadjoReference> = emptyList(),
+    val regionRefs: List<MadjoReference> = emptyList(),
+    val aromaRefs: List<MadjoReference> = emptyList(),
+    val momentRefs: List<MadjoReference> = emptyList(),
+    val stockMilliGrams: Long? = null,
 )
 
 data class CatalogueCriteria(
@@ -56,6 +73,8 @@ data class CatalogueFilterOptions(
     val categories: List<ReferenceEntity> = emptyList(),
     val countries: List<ReferenceEntity> = emptyList(),
     val statuses: List<ReferenceEntity> = emptyList(),
+    val regions: List<ReferenceEntity> = emptyList(),
+    val aromas: List<ReferenceEntity> = emptyList(),
     val aromaticProfiles: List<ReferenceEntity> = emptyList(),
     val badges: List<ReferenceEntity> = emptyList(),
     val containers: List<ReferenceEntity> = emptyList(),
@@ -65,7 +84,15 @@ data class CatalogueFilterOptions(
 
 sealed interface CatalogueUiState {
     data object Loading : CatalogueUiState
-    data class Empty(val criteria: CatalogueCriteria = CatalogueCriteria(), val options: CatalogueFilterOptions = CatalogueFilterOptions(), val madjoRequest: Boolean = false, val madjoRequestText: String? = null, val madjoConversation: MadjoConversationState? = null) : CatalogueUiState
+    data class Empty(
+        val criteria: CatalogueCriteria = CatalogueCriteria(),
+        val options: CatalogueFilterOptions = CatalogueFilterOptions(),
+        val madjoRequest: Boolean = false,
+        val madjoRequestText: String? = null,
+        val madjoConversation: MadjoConversationState? = null,
+        val madjoVocabulary: MadjoVocabulary = MadjoVocabulary(),
+        val madjoResults: MadjoRecommendationOutcome? = null,
+    ) : CatalogueUiState
     data class Content(
         val teas: List<CatalogueTea>,
         val criteria: CatalogueCriteria = CatalogueCriteria(),
@@ -74,6 +101,9 @@ sealed interface CatalogueUiState {
         val noResults: Boolean = false,
         val madjoRequestText: String? = null,
         val madjoConversation: MadjoConversationState? = null,
+        val madjoVocabulary: MadjoVocabulary = MadjoVocabulary(),
+        val madjoResults: MadjoRecommendationOutcome? = null,
+        val recommendationProfiles: List<MadjoTeaProfile> = emptyList(),
     ) : CatalogueUiState
 }
 
@@ -85,20 +115,67 @@ enum class TasteRatingFilter(val label: String) {
 class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     private val criteria = MutableStateFlow(CatalogueCriteria())
     private val madjoConversation = MutableStateFlow<MadjoConversationState?>(null)
+    private data class ResultsRequest(val criteria: MadjoRecommendationCriteria, val acceptedRelaxations: List<MadjoCriterion> = emptyList())
+    private val madjoResultsRequest = MutableStateFlow<ResultsRequest?>(null)
     val currentCriteria get() = criteria.value
 
     fun setQuery(query: String) { criteria.value = criteria.value.copy(query = query) }
-    fun submitQuery() {
+    fun submitQuery(vocabulary: MadjoVocabulary = MadjoVocabulary(), profiles: List<MadjoTeaProfile> = emptyList()) {
         val query = criteria.value.query
-        madjoConversation.value = query.takeIf(::containsMadjoInvocation)?.let(MadjoConversationEngine::start)
+        madjoResultsRequest.value = null
+        val initial = query.takeIf(::containsMadjoInvocation)?.let { MadjoConversationEngine.start(it, vocabulary) }
+        if (initial == null) {
+            madjoConversation.value = null
+            return
+        }
+        val evidence = MadjoRecommendationEngine.questionEvidence(profiles, initial.criteria)
+        val prepared = MadjoConversationEngine.updateQuestionEvidence(
+            initial,
+            vocabulary.copy(usefulQuestionIds = evidence.first, candidateOptionIds = evidence.second, promptVariant = query.hashCode().and(1)),
+        )
+        if (!MadjoConversationEngine.requiresDialogue(prepared)) {
+            madjoConversation.value = null
+            madjoResultsRequest.value = ResultsRequest(prepared.criteria)
+        } else madjoConversation.value = prepared
     }
-    fun submitMadjoAnswer(questionId: MadjoQuestionId, answer: String) {
+    fun submitMadjoAnswer(questionId: MadjoQuestionId, answer: String, profiles: List<MadjoTeaProfile> = emptyList()) {
         madjoConversation.value?.let { current ->
-            madjoConversation.value = MadjoConversationEngine.submitAnswer(current, questionId, answer)
+            val updated = MadjoConversationEngine.submitAnswer(current, questionId, answer)
+            val evidence = MadjoRecommendationEngine.questionEvidence(profiles, updated.criteria)
+            madjoConversation.value = MadjoConversationEngine.updateQuestionEvidence(
+                updated,
+                current.vocabulary.copy(usefulQuestionIds = evidence.first, candidateOptionIds = evidence.second),
+            )
         }
     }
     fun requestMadjoRecommendations() {
-        madjoConversation.value?.let { current -> madjoConversation.value = MadjoConversationEngine.requestRecommendations(current) }
+        madjoConversation.value?.let { current -> madjoResultsRequest.value = ResultsRequest(current.criteria) }
+    }
+    fun acceptMadjoRelaxation(criterion: MadjoCriterion) {
+        madjoResultsRequest.value?.let { current ->
+            val accepted = current.acceptedRelaxations + criterion
+            madjoResultsRequest.value = current.copy(acceptedRelaxations = accepted.distinctBy(MadjoRecommendationEngine::criterionKey))
+        }
+    }
+    fun resumeMadjoDialogue() { madjoResultsRequest.value = null }
+    fun returnToClassicSearch() {
+        madjoResultsRequest.value = null
+        madjoConversation.value = null
+        criteria.value = criteria.value.copy(query = "")
+    }
+    fun reformulateMadjo(request: String, profiles: List<MadjoTeaProfile> = emptyList()) {
+        madjoConversation.value?.let { current ->
+            val updated = MadjoConversationEngine.reformulate(current, request)
+            val evidence = MadjoRecommendationEngine.questionEvidence(profiles, updated.criteria)
+            val prepared = MadjoConversationEngine.updateQuestionEvidence(
+                updated,
+                updated.vocabulary.copy(usefulQuestionIds = evidence.first, candidateOptionIds = evidence.second),
+            )
+            if (!MadjoConversationEngine.requiresDialogue(prepared)) {
+                madjoConversation.value = null
+                madjoResultsRequest.value = ResultsRequest(prepared.criteria)
+            } else madjoConversation.value = prepared
+        }
     }
     fun dismissMadjo() { madjoConversation.value = null }
     fun setCategories(ids: Set<UUID>) { criteria.value = criteria.value.copy(categoryIds = ids) }
@@ -115,17 +192,28 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
         categoryIds = emptySet(), countryIds = emptySet(), statusIds = emptySet(), includeUnspecifiedStatus = false,
         aromaticProfileIds = emptySet(), badgeIds = emptySet(), containerIds = emptySet(), momentIds = emptySet(), tasteRating = TasteRatingFilter.ALL,
     ) }
-    fun resetAll() { criteria.value = CatalogueCriteria(); madjoConversation.value = null }
+    fun resetAll() { criteria.value = CatalogueCriteria(); madjoConversation.value = null; madjoResultsRequest.value = null }
 
-    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoConversation) { rows, current, conversation ->
+    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoConversation, madjoResultsRequest) { rows, current, conversation, resultsRequest ->
         val allTeas = rows.map(TeaWithCatalogData::toCatalogueTea)
+        val recommendationProfiles = allTeas.map(CatalogueTea::toMadjoTeaProfile)
         val options = rows.toFilterOptions()
-        if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, conversation != null, conversation?.initialRequest, conversation)
-        if (conversation != null) {
-            return@combine CatalogueUiState.Content(emptyList(), current, options, madjoRequest = true, madjoRequestText = conversation.initialRequest, madjoConversation = conversation)
+        val madjoVocabulary = rows.toMadjoVocabulary(options)
+        val madjoResults = resultsRequest?.let { MadjoRecommendationEngine.recommend(recommendationProfiles, it.criteria, it.acceptedRelaxations) }
+        val madjoRequest = conversation != null && resultsRequest == null
+        if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, madjoRequest, conversation?.initialRequest, conversation, madjoVocabulary, madjoResults)
+        if (madjoRequest || madjoResults != null) {
+            return@combine CatalogueUiState.Content(
+                emptyList(), current, options, madjoRequest = madjoRequest,
+                madjoRequestText = conversation?.initialRequest, madjoConversation = conversation,
+                madjoVocabulary = madjoVocabulary, madjoResults = madjoResults, recommendationProfiles = recommendationProfiles,
+            )
         }
         val visible = allTeas.filter { tea -> matchesCatalogueTea(tea, current) }
-        CatalogueUiState.Content(visible, current, options, noResults = visible.isEmpty())
+        CatalogueUiState.Content(
+            visible, current, options, noResults = visible.isEmpty(),
+            madjoVocabulary = madjoVocabulary, recommendationProfiles = recommendationProfiles,
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), CatalogueUiState.Loading)
 }
 
@@ -144,33 +232,7 @@ internal fun routeCatalogueQuery(query: String): CatalogueQueryRoute =
 
 /** Matches a standalone name (or a one-edit typo) after accent and punctuation normalization. */
 internal fun containsMadjoInvocation(query: String): Boolean =
-    normalizeCatalogueSearch(query).split(' ').any { token ->
-        token == "madjo" || token == "majdo" ||
-            levenshteinDistanceAtMostOne(token, "madjo") || levenshteinDistanceAtMostOne(token, "majdo")
-    }
-
-private fun levenshteinDistanceAtMostOne(left: String, right: String): Boolean {
-    if (left.isEmpty() || kotlin.math.abs(left.length - right.length) > 1) return false
-    if (left.length == right.length) {
-        return left.indices.count { left[it] != right[it] } <= 1
-    }
-    val shorter = if (left.length < right.length) left else right
-    val longer = if (left.length < right.length) right else left
-    var shortIndex = 0
-    var longIndex = 0
-    var skipped = false
-    while (shortIndex < shorter.length && longIndex < longer.length) {
-        if (shorter[shortIndex] == longer[longIndex]) {
-            shortIndex++
-            longIndex++
-        } else {
-            if (skipped) return false
-            skipped = true
-            longIndex++
-        }
-    }
-    return true
-}
+    MadjoInvocation.contains(query)
 
 internal fun normalizeCatalogueSearch(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
     .replace(Regex("\\p{Mn}+"), "")
@@ -215,12 +277,35 @@ private fun List<TeaWithCatalogData>.toFilterOptions(): CatalogueFilterOptions {
     return CatalogueFilterOptions(
         categories = sorted(rows.map { it.category }),
         countries = sorted(rows.flatMap { it.countries }),
+        regions = sorted(rows.flatMap { it.regions }),
+        aromas = sorted(rows.flatMap { it.aromas }),
         statuses = sorted(rows.mapNotNull { it.status }),
         aromaticProfiles = sorted(rows.flatMap { it.aromaticProfiles }),
         badges = sorted(rows.flatMap { it.badges }),
         containers = sorted(rows.mapNotNull { it.container }),
         moments = sorted(rows.flatMap { it.moments }),
         hasUnspecifiedStatus = rows.any { it.status == null },
+    )
+}
+
+private fun List<TeaWithCatalogData>.toMadjoVocabulary(options: CatalogueFilterOptions): MadjoVocabulary {
+    fun ReferenceEntity.toMadjoReference() = MadjoReference(id.toString(), semanticKey, label, parentCountryId?.toString())
+    fun ReferenceValue.toMadjoReference() = MadjoReference(id.toString(), semanticKey, label, parentCountryId?.toString())
+    val activeCategories = options.categories.map(ReferenceEntity::toMadjoReference)
+    val activeMoments = options.moments.map(ReferenceEntity::toMadjoReference)
+    return MadjoVocabulary(
+        categories = (StandardReferenceSeeds.categories.map(ReferenceValue::toMadjoReference) + activeCategories).distinctBy { it.id },
+        categoryOptions = activeCategories,
+        aromas = options.aromas.map(ReferenceEntity::toMadjoReference),
+        moments = (StandardReferenceSeeds.moments.map(ReferenceValue::toMadjoReference) + activeMoments).distinctBy { it.id },
+        momentOptions = activeMoments,
+        countries = options.countries.map(ReferenceEntity::toMadjoReference),
+        regions = options.regions.map(ReferenceEntity::toMadjoReference),
+        ratedTeaCount = count { it.tea.tasteRating != null },
+        highRatedTeaCount = count { it.tea.tasteRating != null && it.tea.tasteRating >= 8.0 },
+        availableStockCount = count { it.tea.stockMilliGrams != null && it.tea.stockMilliGrams > 0L },
+        outOfStockCount = count { it.tea.stockMilliGrams == 0L },
+        unknownStockCount = count { it.tea.stockMilliGrams == null || it.tea.stockMilliGrams < 0L },
     )
 }
 
@@ -232,14 +317,35 @@ internal fun TeaWithCatalogData.toCatalogueTea(): CatalogueTea = CatalogueTea(
     categoryId = category.id,
     origins = formatOrigins(countries, regions),
     countryIds = countries.map { it.id }.toSet(),
+    regionIds = regions.map { it.id }.toSet(),
     personalNotes = tea.personalNotes?.takeIf(String::isNotBlank),
     tasteRating = tea.tasteRating,
     statusId = status?.id,
     searchableFields = listOf(tea.name, category.label) + countries.map { it.label } + regions.map { it.label } + aromas.map { it.label } + aromaticProfiles.map { it.label },
+    aromaIds = aromas.map { it.id }.toSet(),
     aromaticProfileIds = aromaticProfiles.map { it.id }.toSet(),
     badgeIds = badges.map { it.id }.toSet(),
     containerId = container?.id,
     momentIds = moments.map { it.id }.toSet(),
+    countryRefs = countries.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
+    regionRefs = regions.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
+    aromaRefs = aromas.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
+    momentRefs = moments.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
+    stockMilliGrams = tea.stockMilliGrams,
+)
+
+internal fun CatalogueTea.toMadjoTeaProfile(): MadjoTeaProfile = MadjoTeaProfile(
+    id = id.toString(),
+    name = name,
+    categoryId = categoryId.toString(),
+    categoryKey = categoryKey,
+    categoryLabel = category,
+    countries = countryRefs,
+    regions = regionRefs,
+    aromas = aromaRefs,
+    moments = momentRefs,
+    tasteRating = tasteRating,
+    stockMilliGrams = stockMilliGrams,
 )
 
 internal fun formatOrigins(countries: List<ReferenceEntity>, regions: List<ReferenceEntity>): List<String> {

@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import fr.thesdupalais.presentation.theme.ThesDuPalaisTheme
 import fr.thesdupalais.domain.madjo.MadjoConversationEngine
+import fr.thesdupalais.domain.madjo.MadjoReference
+import fr.thesdupalais.domain.madjo.MadjoVocabulary
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -67,19 +69,21 @@ class CatalogueScreenTest {
     @Test fun showsMadjoRequestWithoutUnavailableLabel() {
         composeRule.setContent {
             ThesDuPalaisTheme {
-                val request = "  MAdJo aide"
+                val request = "  MAdJo, un thé vert"
+                val categories = listOf(MadjoReference("green", "GREEN", "Thé vert"), MadjoReference("black", "BLACK", "Thé noir"))
+                val vocabulary = MadjoVocabulary(categories = categories, categoryOptions = categories, aromas = listOf(MadjoReference("floral", "FLORAL", "Floral")))
                 CatalogueContent(CatalogueUiState.Content(
                     emptyList(), CatalogueCriteria(query = request), madjoRequest = true,
-                    madjoRequestText = request, madjoConversation = MadjoConversationEngine.start(request),
+                    madjoRequestText = request, madjoConversation = MadjoConversationEngine.start(request, vocabulary),
                 ))
             }
         }
         composeRule.onNodeWithTag("catalogue-search").assertIsDisplayed()
-        composeRule.onNodeWithTag("catalogue-search").assertTextEquals("  MAdJo aide")
+        composeRule.onNodeWithTag("catalogue-search").assertTextEquals("  MAdJo, un thé vert")
         composeRule.onAllNodesWithText("Madjo sera bientôt disponible").assertCountEquals(0)
-        composeRule.onNodeWithText("  MAdJo aide").assertIsDisplayed()
+        composeRule.onNodeWithText("  MAdJo, un thé vert").assertIsDisplayed()
         composeRule.onNodeWithTag("madjo-message-list").assertIsDisplayed()
-        composeRule.onNodeWithTag("madjo-answer-tea").assertIsDisplayed()
+        composeRule.onNodeWithTag("madjo-answer-aroma:floral").assertIsDisplayed()
         composeRule.onNodeWithTag("madjo-recommendations").assertIsDisplayed()
         composeRule.onAllNodesWithText("Sencha").assertCountEquals(0)
     }

@@ -62,9 +62,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.UUID
 import fr.thesdupalais.domain.madjo.MadjoConversationState
+import fr.thesdupalais.domain.madjo.MadjoCriterion
 import fr.thesdupalais.domain.madjo.MadjoMessage
 import fr.thesdupalais.domain.madjo.MadjoQuestionId
+import fr.thesdupalais.domain.madjo.MadjoRecommendationOutcome
 import fr.thesdupalais.domain.madjo.MadjoSpeaker
+import fr.thesdupalais.domain.madjo.MadjoTeaProfile
+import fr.thesdupalais.domain.madjo.MadjoVocabulary
 
 @Composable
 fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit, onAddTea: () -> Unit = {}) {
@@ -74,10 +78,14 @@ fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit
         onTeaSelected = onTeaSelected,
         onAddTea = onAddTea,
         onQueryChange = viewModel::setQuery,
-        onSubmitQuery = viewModel::submitQuery,
+        onSubmitQuery = { vocabulary, profiles -> viewModel.submitQuery(vocabulary, profiles) },
         onDismissMadjo = viewModel::dismissMadjo,
-        onMadjoAnswer = viewModel::submitMadjoAnswer,
+        onMadjoAnswer = { questionId, answer, profiles -> viewModel.submitMadjoAnswer(questionId, answer, profiles) },
         onMadjoRecommendations = viewModel::requestMadjoRecommendations,
+        onMadjoRelaxation = viewModel::acceptMadjoRelaxation,
+        onResumeMadjo = viewModel::resumeMadjoDialogue,
+        onReturnToSearch = viewModel::returnToClassicSearch,
+        onMadjoReformulate = { request, profiles -> viewModel.reformulateMadjo(request, profiles) },
         onCategoriesChange = viewModel::setCategories,
         onCountriesChange = viewModel::setCountries,
         onStatusesChange = viewModel::setStatuses,
@@ -97,10 +105,14 @@ internal fun CatalogueContent(
     onTeaSelected: (UUID) -> Unit = {},
     onAddTea: () -> Unit = {},
     onQueryChange: (String) -> Unit = {},
-    onSubmitQuery: () -> Unit = {},
+    onSubmitQuery: (MadjoVocabulary, List<MadjoTeaProfile>) -> Unit = { _, _ -> },
     onDismissMadjo: () -> Unit = {},
-    onMadjoAnswer: (MadjoQuestionId, String) -> Unit = { _, _ -> },
+    onMadjoAnswer: (MadjoQuestionId, String, List<MadjoTeaProfile>) -> Unit = { _, _, _ -> },
     onMadjoRecommendations: () -> Unit = {},
+    onMadjoRelaxation: (MadjoCriterion) -> Unit = {},
+    onResumeMadjo: () -> Unit = {},
+    onReturnToSearch: () -> Unit = {},
+    onMadjoReformulate: (String, List<MadjoTeaProfile>) -> Unit = { _, _ -> },
     onCategoriesChange: (Set<UUID>) -> Unit = {},
     onCountriesChange: (Set<UUID>) -> Unit = {},
     onStatusesChange: (Set<UUID>, Boolean) -> Unit = { _, _ -> },
@@ -118,6 +130,9 @@ internal fun CatalogueContent(
     val madjoRequest = when (state) { is CatalogueUiState.Content -> state.madjoRequest; is CatalogueUiState.Empty -> state.madjoRequest; else -> false }
     val madjoDetected = containsMadjoInvocation(criteria.query)
     val madjoConversation = when (state) { is CatalogueUiState.Content -> state.madjoConversation; is CatalogueUiState.Empty -> state.madjoConversation; else -> null }
+    val madjoVocabulary = when (state) { is CatalogueUiState.Content -> state.madjoVocabulary; is CatalogueUiState.Empty -> state.madjoVocabulary; else -> MadjoVocabulary() }
+    val recommendationProfiles = when (state) { is CatalogueUiState.Content -> state.recommendationProfiles; else -> emptyList() }
+    val madjoResults = when (state) { is CatalogueUiState.Content -> state.madjoResults; is CatalogueUiState.Empty -> state.madjoResults; else -> null }
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
@@ -129,7 +144,7 @@ internal fun CatalogueContent(
         )
         Text("Ma collection de thés", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(24.dp))
-        CatalogueSearchControls(criteria, onQueryChange, onSubmitQuery, { showFilters = true }, onResetAll, madjoRequest)
+        CatalogueSearchControls(criteria, onQueryChange, { onSubmitQuery(madjoVocabulary, recommendationProfiles) }, { showFilters = true }, onResetAll, madjoRequest)
         if (criteria.hasFilters) {
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("catalogue-active-filters"),
@@ -149,11 +164,20 @@ internal fun CatalogueContent(
         when (state) {
             CatalogueUiState.Loading -> CircularProgressIndicator(modifier = Modifier.testTag("catalogue-loading"))
             is CatalogueUiState.Empty -> Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (!state.madjoRequest) CatalogueEmptyState(Modifier.align(androidx.compose.ui.Alignment.Center))
+                if (madjoResults != null) MadjoResultsPanel(
+                    madjoResults, onRelax = onMadjoRelaxation, onResume = onResumeMadjo,
+                    onReturnToSearch = onReturnToSearch, onTeaSelected = onTeaSelected,
+                    modifier = Modifier.fillMaxSize(), canResume = madjoConversation != null,
+                ) else if (!state.madjoRequest) CatalogueEmptyState(Modifier.align(androidx.compose.ui.Alignment.Center))
                 AddTeaButton(Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp), onAddTea)
             }
             is CatalogueUiState.Content -> Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
+                    madjoResults != null -> MadjoResultsPanel(
+                        madjoResults, onRelax = onMadjoRelaxation, onResume = onResumeMadjo,
+                        onReturnToSearch = onReturnToSearch, onTeaSelected = onTeaSelected,
+                        modifier = Modifier.fillMaxSize(), canResume = madjoConversation != null,
+                    )
                     state.madjoRequest -> Unit
                     state.noResults && !madjoDetected -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Aucun thé ne correspond à ces critères.", modifier = Modifier.testTag("catalogue-no-results"), style = MaterialTheme.typography.titleMedium)
@@ -178,8 +202,9 @@ internal fun CatalogueContent(
         MadjoDialog(
             conversation = madjoConversation,
             onDismiss = onDismissMadjo,
-            onAnswer = onMadjoAnswer,
+            onAnswer = { questionId, answer -> onMadjoAnswer(questionId, answer, recommendationProfiles) },
             onRequestRecommendations = onMadjoRecommendations,
+            onReformulate = { request -> onMadjoReformulate(request, recommendationProfiles) },
         )
     }
 }
@@ -190,6 +215,7 @@ private fun MadjoDialog(
     onDismiss: () -> Unit,
     onAnswer: (MadjoQuestionId, String) -> Unit,
     onRequestRecommendations: () -> Unit,
+    onReformulate: (String) -> Unit,
 ) {
     var freeText by remember(conversation.initialRequest) { mutableStateOf("") }
     val messageListState = rememberLazyListState()
@@ -229,7 +255,30 @@ private fun MadjoDialog(
                 ) {
                     items(conversation.messages, key = MadjoMessage::id) { message -> MadjoMessageBubble(message) }
                 }
-                if (conversation.recommendationsRequested) {
+                if (conversation.offTopic) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = freeText,
+                            onValueChange = { freeText = it },
+                            modifier = Modifier.weight(1f).testTag("madjo-free-answer"),
+                            placeholder = { Text("Reformuler votre envie") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = {
+                                if (freeText.isNotBlank()) {
+                                    onReformulate(freeText.trim())
+                                    freeText = ""
+                                }
+                            }),
+                        )
+                        TextButton(onClick = {
+                            if (freeText.isNotBlank()) {
+                                onReformulate(freeText.trim())
+                                freeText = ""
+                            }
+                        }, enabled = freeText.isNotBlank(), modifier = Modifier.testTag("madjo-send-reformulation")) { Text("Envoyer") }
+                    }
+                } else if (conversation.recommendationsRequested) {
                     Text("Transition M2 → M3", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     Text("Aucune recommandation n’est affichée avant le branchement du moteur M3.", style = MaterialTheme.typography.bodyMedium)
                 } else {
@@ -237,7 +286,7 @@ private fun MadjoDialog(
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 138.dp).verticalScroll(rememberScrollState())) {
                             question.options.forEach { option ->
                                 TextButton(
-                                    onClick = { onAnswer(question.id, option.label) },
+                                    onClick = { onAnswer(question.id, option.label); freeText = "" },
                                     modifier = Modifier.fillMaxWidth().testTag("madjo-answer-${option.value}"),
                                 ) { Text(option.label) }
                             }
@@ -277,6 +326,67 @@ private fun MadjoDialog(
             }
         }
     }
+}
+
+@Composable
+private fun MadjoResultsPanel(
+    outcome: MadjoRecommendationOutcome,
+    onRelax: (MadjoCriterion) -> Unit,
+    onResume: () -> Unit,
+    onReturnToSearch: () -> Unit,
+    onTeaSelected: (UUID) -> Unit,
+    modifier: Modifier = Modifier,
+    canResume: Boolean = false,
+) {
+    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Les recommandations de Madjo", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        outcome.acceptedRelaxations.takeIf { it.isNotEmpty() }?.let { relaxed ->
+            Text("Critère assoupli avec ton accord : ${relaxed.joinToString { criterionLabel(it) }}.", style = MaterialTheme.typography.bodyMedium)
+        }
+        if (outcome.unresolvedAmbiguities.isNotEmpty()) {
+            Text("Je ne peux pas encore appliquer ces critères : ${outcome.unresolvedAmbiguities.joinToString { it.phrase }}. Reprenons la précision de ta demande.")
+        } else if (!outcome.hasResults) {
+            Text(if (outcome.collectionEmpty) "Ta collection ne contient aucun thé à recommander." else "Aucun thé ne respecte toutes les contraintes indiquées. Je ne les assouplis pas sans ton accord.")
+            outcome.relaxationOptions.forEach { option ->
+                TextButton(onClick = { onRelax(option.criterion) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Assouplir « ${criterionLabel(option.criterion)} » (${option.matchingTeaCount} résultat${if (option.matchingTeaCount > 1) "s" else ""})")
+                }
+            }
+        } else {
+            outcome.recommendations.forEach { recommendation ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth().testTag("madjo-result-${recommendation.tea.id}"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    TextButton(
+                        onClick = { runCatching { UUID.fromString(recommendation.tea.id) }.getOrNull()?.let(onTeaSelected) },
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    ) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(recommendation.tea.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(recommendation.explanation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+        if (canResume && (outcome.unresolvedAmbiguities.isNotEmpty() || !outcome.hasResults)) {
+            TextButton(onClick = onResume, modifier = Modifier.testTag("madjo-resume-dialog")) { Text("Reprendre le dialogue") }
+        }
+        TextButton(onClick = onReturnToSearch, modifier = Modifier.testTag("madjo-return-search")) { Text("Retour à la recherche") }
+    }
+}
+
+private fun criterionLabel(criterion: MadjoCriterion): String = when (criterion.concept) {
+    "beverage_type" -> if (criterion.value == "infusion") "infusion" else "thé"
+    "stock" -> when (criterion.value) {
+        "available" -> "disponible en stock"
+        "out_of_stock" -> "épuisé"
+        else -> "stock inconnu"
+    }
+    "taste_rating" -> criterion.displayValue ?: "note gustative ${criterion.value}"
+    else -> criterion.displayValue ?: criterion.value
 }
 
 @Composable
