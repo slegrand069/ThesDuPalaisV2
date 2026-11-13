@@ -46,6 +46,9 @@ interface TeaDao {
     @Query("UPDATE teas SET stockMilliGrams = :stockMilliGrams WHERE id = :teaId AND archivedAtEpochMillis IS NULL")
     suspend fun updateStock(teaId: UUID, stockMilliGrams: Long): Int
 
+    @Query("UPDATE teas SET archivedAtEpochMillis = :archivedAtEpochMillis WHERE id = :teaId AND archivedAtEpochMillis IS NULL")
+    suspend fun archiveActive(teaId: UUID, archivedAtEpochMillis: Long): Int
+
     @Query("SELECT * FROM teas WHERE archivedAtEpochMillis IS NULL ORDER BY name COLLATE NOCASE")
     fun observeActive(): Flow<List<TeaEntity>>
 

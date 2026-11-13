@@ -67,6 +67,7 @@ fun TeaDetailScreen(viewModel: TeaDetailViewModel, onBack: () -> Unit, onEdit: (
         viewModel::recordConsumedTasting,
         viewModel::recordTasting,
         viewModel::deleteTasting,
+        viewModel::archiveTea,
     )
 }
 
@@ -79,6 +80,8 @@ internal fun TeaDetailContent(
     onRecordTasting: suspend (Long) -> Unit = {},
     onRecordManualTasting: suspend (Long, Long) -> Unit = { _, _ -> },
     onDeleteTasting: suspend (UUID) -> Boolean = { false },
+    onArchiveTea: suspend () -> Boolean = { false },
+    onArchiveCompleted: () -> Unit = onBack,
 ) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         DetailHeader(
@@ -105,6 +108,8 @@ internal fun TeaDetailContent(
                 onRecordTasting,
                 onRecordManualTasting,
                 onDeleteTasting,
+                onArchiveTea,
+                onArchiveCompleted,
             )
         }
     }
@@ -162,6 +167,8 @@ private fun TeaDetailBody(
     onRecordTasting: suspend (Long) -> Unit,
     onRecordManualTasting: suspend (Long, Long) -> Unit,
     onDeleteTasting: suspend (UUID) -> Boolean,
+    onArchiveTea: suspend () -> Boolean,
+    onArchiveCompleted: () -> Unit,
 ) {
     val tea = state.tea
     val scope = rememberCoroutineScope()
@@ -180,6 +187,9 @@ private fun TeaDetailBody(
     var tastingToDelete by remember(tea.id) { mutableStateOf<TeaTasting?>(null) }
     var deletingTasting by remember(tea.id) { mutableStateOf(false) }
     var deletionError by remember(tea.id) { mutableStateOf<String?>(null) }
+    var showArchiveDialog by remember(tea.id) { mutableStateOf(false) }
+    var archivingTea by remember(tea.id) { mutableStateOf(false) }
+    var archiveError by remember(tea.id) { mutableStateOf<String?>(null) }
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -321,7 +331,55 @@ private fun TeaDetailBody(
                 modifier = Modifier.fillMaxWidth().testTag("tea-tasting-add"),
             ) { Text("Ajouter une dégustation") }
         }
+
+        DetailCard(Modifier.testTag("tea-detail-archive")) {
+            SectionLabel("COLLECTION")
+            TextButton(
+                onClick = { archiveError = null; showArchiveDialog = true },
+                enabled = !archivingTea,
+                modifier = Modifier.testTag("tea-detail-archive-action"),
+            ) { Text("Retirer de la collection active") }
+        }
     }
+    if (showArchiveDialog) AlertDialog(
+        onDismissRequest = { if (!archivingTea) showArchiveDialog = false },
+        title = { Text("Archiver ce thé ?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("« ${tea.name} » sera retiré de la collection active. Sa fiche et son historique de dégustations seront conservés.")
+                tea.stockMilliGrams?.takeIf { it > 0L }?.let { stock ->
+                    Text("Attention, le stock de ce thé n’est pas nul (${formatStockQuantity(stock)}). L’archiver rendra impossible toute modification de celui-ci !")
+                }
+                archiveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (!archivingTea) scope.launch {
+                        archivingTea = true
+                        archiveError = null
+                        try {
+                            if (onArchiveTea()) {
+                                showArchiveDialog = false
+                                onArchiveCompleted()
+                            } else archiveError = "Ce thé n’est plus disponible dans la collection."
+                        } catch (error: Exception) {
+                            archiveError = error.message?.takeIf(String::isNotBlank) ?: "Le thé n’a pas pu être archivé."
+                        } finally {
+                            archivingTea = false
+                        }
+                    }
+                },
+                enabled = !archivingTea,
+                modifier = Modifier.testTag("tea-detail-archive-confirm"),
+            ) { Text(if (archivingTea) "Archivage…" else "Archiver") }
+        },
+        dismissButton = {
+            TextButton(onClick = { showArchiveDialog = false }, enabled = !archivingTea, modifier = Modifier.testTag("tea-detail-archive-cancel")) { Text("Annuler") }
+        },
+        modifier = Modifier.testTag("tea-detail-archive-dialog"),
+    )
 
     if (showConsumptionDialog) {
         AlertDialog(

@@ -47,6 +47,13 @@ class TeaRepository(
     private val database: AppDatabase,
     private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
 ) {
+    /** Removes a tea from the active catalogue without deleting its record or related tasting history. */
+    suspend fun archiveTea(teaId: UUID): Boolean = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            database.teaDao().archiveActive(teaId, System.currentTimeMillis()) == 1
+        }
+    }
+
     /** Records one tasting and updates a known stock atomically. Unknown stock remains unknown. */
     suspend fun recordConsumedTasting(teaId: UUID, consumedMilliGrams: Long): UUID =
         recordTasting(teaId, System.currentTimeMillis(), consumedMilliGrams)

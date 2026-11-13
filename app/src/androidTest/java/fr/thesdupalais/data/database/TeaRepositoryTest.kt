@@ -226,6 +226,38 @@ class TeaRepositoryTest {
         assertNotNull(database.tastingDao().findForTea(tastingId, teaId))
     }
 
+    @Test fun archivingTeaPreservesItsRecordAssociationsAndTastingHistory() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Thé archivé", category.id, stockMilliGrams = 8_000L))
+        val tastingId = repository.recordTasting(teaId, 1_700_000_000_000L, 2_000L)
+
+        assertTrue(repository.archiveTea(teaId))
+
+        val archived = requireNotNull(database.teaDao().findById(teaId))
+        assertEquals("Thé archivé", archived.name)
+        assertNotNull(archived.archivedAtEpochMillis)
+        assertNull(database.teaDao().observeActiveDetail(teaId).first())
+        assertNotNull(database.tastingDao().findForTea(tastingId, teaId))
+        assertEquals(1, database.teaDao().count())
+        assertTrue(!repository.archiveTea(teaId))
+    }
+
+    @Test fun archivingTeaRespectsBlockedWriteCoordinator() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = repository.create(NewTea("Thé protégé", category.id))
+        val blockedRepository = TeaRepository(
+            database,
+            BackupOperationWriteCoordinator {
+                RecoveryInspection(RecoveryFinding.RECOVERY_FAILED, detail = "Écriture bloquée pour test.")
+            },
+        )
+
+        val failure = runCatching { blockedRepository.archiveTea(teaId) }.exceptionOrNull()
+
+        assertTrue(failure is BackupOperationPendingException)
+        assertNull(database.teaDao().findById(teaId)?.archivedAtEpochMillis)
+    }
+
     @Test fun rejectsWrongReferenceTypeAndInvalidNumbersBeforeWriting() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
         val aroma = reference(ReferenceKind.AROMA, "Aroma")

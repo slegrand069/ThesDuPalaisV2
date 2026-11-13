@@ -83,6 +83,8 @@ class TeaDetailViewModel(
     }
 
     suspend fun deleteTasting(tastingId: UUID): Boolean = teaRepository.deleteTasting(teaId, tastingId)
+
+    suspend fun archiveTea(): Boolean = teaRepository.archiveTea(teaId)
 }
 
 class TeaDetailViewModelFactory(

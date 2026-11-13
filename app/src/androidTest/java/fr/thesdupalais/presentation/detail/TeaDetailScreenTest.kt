@@ -226,6 +226,68 @@ class TeaDetailScreenTest {
         composeRule.onNodeWithTag("tea-tasting-delete-dialog").assertIsDisplayed()
     }
 
+    @Test fun teaArchivingRequiresConfirmationAndReturnsToCollectionWhenSuccessful() {
+        var archived = false
+        var returnedToCollection = false
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail(), emptyList()),
+                    onBack = {},
+                    onArchiveTea = { archived = true; true },
+                    onArchiveCompleted = { returnedToCollection = true },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-detail-archive-action").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-detail-archive-dialog").assertIsDisplayed()
+        composeRule.onNodeWithText("« Sencha fictif » sera retiré de la collection active. Sa fiche et son historique de dégustations seront conservés.").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Attention, le stock de ce thé n’est pas nul").assertCountEquals(0)
+        composeRule.onNodeWithTag("tea-detail-archive-cancel").performClick()
+        assertTrue(!archived)
+        assertTrue(!returnedToCollection)
+        composeRule.onAllNodesWithTag("tea-detail-archive-dialog").assertCountEquals(0)
+
+        composeRule.onNodeWithTag("tea-detail-archive-action").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-detail-archive-confirm").performClick()
+        composeRule.waitUntil(3_000) { returnedToCollection }
+        assertTrue(archived)
+    }
+
+    @Test fun archiveConfirmationWarnsWhenKnownStockIsNonZero() {
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail().copy(stockMilliGrams = 12_500L), emptyList()),
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-detail-archive-action").performScrollTo().performClick()
+        composeRule.onNodeWithText(
+            "Attention, le stock de ce thé n’est pas nul (12,5 g). L’archiver rendra impossible toute modification de celui-ci !",
+        ).assertIsDisplayed()
+    }
+
+    @Test fun failedTeaArchivingKeepsDialogAndExplainsFailure() {
+        composeRule.setContent {
+            ThesDuPalaisTheme {
+                TeaDetailContent(
+                    TeaDetailUiState.Content(detail(), emptyList()),
+                    onBack = {},
+                    onArchiveTea = { throw IllegalStateException("Écriture bloquée pour test.") },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("tea-detail-archive-action").performScrollTo().performClick()
+        composeRule.onNodeWithTag("tea-detail-archive-confirm").performClick()
+        composeRule.onNodeWithText("Écriture bloquée pour test.").assertIsDisplayed()
+        composeRule.onNodeWithTag("tea-detail-archive-dialog").assertIsDisplayed()
+    }
+
     private fun detail() = TeaDetail(
         id = UUID.fromString("00000000-0000-4000-8000-000000000003"),
         name = "Sencha fictif",
