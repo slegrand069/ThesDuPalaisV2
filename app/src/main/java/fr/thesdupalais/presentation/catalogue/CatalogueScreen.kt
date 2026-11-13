@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -21,22 +24,30 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -45,10 +56,15 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.UUID
+import fr.thesdupalais.domain.madjo.MadjoConversationState
+import fr.thesdupalais.domain.madjo.MadjoMessage
+import fr.thesdupalais.domain.madjo.MadjoQuestionId
+import fr.thesdupalais.domain.madjo.MadjoSpeaker
 
 @Composable
 fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit, onAddTea: () -> Unit = {}) {
@@ -60,6 +76,8 @@ fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit
         onQueryChange = viewModel::setQuery,
         onSubmitQuery = viewModel::submitQuery,
         onDismissMadjo = viewModel::dismissMadjo,
+        onMadjoAnswer = viewModel::submitMadjoAnswer,
+        onMadjoRecommendations = viewModel::requestMadjoRecommendations,
         onCategoriesChange = viewModel::setCategories,
         onCountriesChange = viewModel::setCountries,
         onStatusesChange = viewModel::setStatuses,
@@ -81,6 +99,8 @@ internal fun CatalogueContent(
     onQueryChange: (String) -> Unit = {},
     onSubmitQuery: () -> Unit = {},
     onDismissMadjo: () -> Unit = {},
+    onMadjoAnswer: (MadjoQuestionId, String) -> Unit = { _, _ -> },
+    onMadjoRecommendations: () -> Unit = {},
     onCategoriesChange: (Set<UUID>) -> Unit = {},
     onCountriesChange: (Set<UUID>) -> Unit = {},
     onStatusesChange: (Set<UUID>, Boolean) -> Unit = { _, _ -> },
@@ -97,7 +117,7 @@ internal fun CatalogueContent(
     var showFilters by remember { mutableStateOf(false) }
     val madjoRequest = when (state) { is CatalogueUiState.Content -> state.madjoRequest; is CatalogueUiState.Empty -> state.madjoRequest; else -> false }
     val madjoDetected = containsMadjoInvocation(criteria.query)
-    val madjoRequestText = when (state) { is CatalogueUiState.Content -> state.madjoRequestText; is CatalogueUiState.Empty -> state.madjoRequestText; else -> null }
+    val madjoConversation = when (state) { is CatalogueUiState.Content -> state.madjoConversation; is CatalogueUiState.Empty -> state.madjoConversation; else -> null }
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
@@ -154,43 +174,136 @@ internal fun CatalogueContent(
         options, criteria, { showFilters = false }, onCategoriesChange, onCountriesChange, onStatusesChange,
         onProfilesChange, onBadgesChange, onContainersChange, onMomentsChange, onTasteRatingChange, onResetFilters,
     )
-    if (madjoRequest && madjoRequestText != null) {
+    if (madjoRequest && madjoConversation != null) {
         MadjoDialog(
-            initialRequest = madjoRequestText,
+            conversation = madjoConversation,
             onDismiss = onDismissMadjo,
+            onAnswer = onMadjoAnswer,
+            onRequestRecommendations = onMadjoRecommendations,
         )
     }
 }
 
 @Composable
-private fun MadjoDialog(initialRequest: String, onDismiss: () -> Unit) {
-    AlertDialog(
+private fun MadjoDialog(
+    conversation: MadjoConversationState,
+    onDismiss: () -> Unit,
+    onAnswer: (MadjoQuestionId, String) -> Unit,
+    onRequestRecommendations: () -> Unit,
+) {
+    var freeText by remember(conversation.initialRequest) { mutableStateOf("") }
+    val messageListState = rememberLazyListState()
+    LaunchedEffect(conversation.messages.size) {
+        val layout = messageListState.layoutInfo
+        val wasNearBottom = layout.totalItemsCount == 0 || layout.visibleItemsInfo.lastOrNull()?.index?.let { it >= layout.totalItemsCount - 2 } == true
+        if (wasNearBottom && conversation.messages.isNotEmpty()) messageListState.animateScrollToItem(conversation.messages.lastIndex)
+    }
+    Dialog(
         onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(38.dp)) {
-                    Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
-                        Text("M", color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.Bold)
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(.94f).heightIn(max = 700.dp).imePadding().testTag("madjo-dialog"),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(38.dp)) {
+                        Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                            Text("M", color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.Bold)
+                        }
                     }
+                    Column(Modifier.weight(1f)) {
+                        Text("Madjo", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        Text(conversation.initialRequest, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    TextButton(onClick = onDismiss) { Text("Fermer") }
                 }
-                Text("Madjo")
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+                HorizontalDividerMadjo()
+                LazyColumn(
+                    state = messageListState,
+                    modifier = Modifier.weight(1f, fill = true).fillMaxWidth().testTag("madjo-message-list"),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text(initialRequest, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                    items(conversation.messages, key = MadjoMessage::id) { message -> MadjoMessageBubble(message) }
                 }
-                Text("Madjo prépare ses questions…", style = MaterialTheme.typography.bodyMedium)
+                if (conversation.recommendationsRequested) {
+                    Text("Transition M2 → M3", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("Aucune recommandation n’est affichée avant le branchement du moteur M3.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    conversation.currentQuestion?.let { question ->
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 138.dp).verticalScroll(rememberScrollState())) {
+                            question.options.forEach { option ->
+                                TextButton(
+                                    onClick = { onAnswer(question.id, option.label) },
+                                    modifier = Modifier.fillMaxWidth().testTag("madjo-answer-${option.value}"),
+                                ) { Text(option.label) }
+                            }
+                        }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = freeText,
+                                onValueChange = { freeText = it },
+                                modifier = Modifier.weight(1f).testTag("madjo-free-answer"),
+                                placeholder = { Text("Ou écrivez votre réponse") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(onSend = {
+                                    if (freeText.isNotBlank()) {
+                                        onAnswer(question.id, freeText.trim())
+                                        freeText = ""
+                                    }
+                                }),
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (freeText.isNotBlank()) {
+                                        onAnswer(question.id, freeText.trim())
+                                        freeText = ""
+                                    }
+                                },
+                                enabled = freeText.isNotBlank(),
+                                modifier = Modifier.testTag("madjo-send-answer"),
+                            ) { Text("Envoyer") }
+                        }
+                    }
+                    Button(
+                        onClick = onRequestRecommendations,
+                        modifier = Modifier.fillMaxWidth().testTag("madjo-recommendations"),
+                    ) { Text("Voir mes recommandations") }
+                }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
-        modifier = Modifier.testTag("madjo-dialog"),
-    )
+        }
+    }
+}
+
+@Composable
+private fun HorizontalDividerMadjo() {
+    androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+@Composable
+private fun MadjoMessageBubble(message: MadjoMessage) {
+    val fromUser = message.speaker == MadjoSpeaker.USER
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+        horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
+    ) {
+        Surface(
+            modifier = Modifier.widthIn(max = 300.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = if (fromUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+        ) {
+            Text(
+                message.text,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                color = if (fromUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
 }
 
 @Composable

@@ -3,7 +3,6 @@ package fr.thesdupalais.presentation.catalogue
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -11,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import fr.thesdupalais.presentation.theme.ThesDuPalaisTheme
+import fr.thesdupalais.domain.madjo.MadjoConversationEngine
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -67,13 +67,20 @@ class CatalogueScreenTest {
     @Test fun showsMadjoRequestWithoutUnavailableLabel() {
         composeRule.setContent {
             ThesDuPalaisTheme {
-                CatalogueContent(CatalogueUiState.Content(emptyList(), CatalogueCriteria(query = "  MAdJo aide"), madjoRequest = true, madjoRequestText = "  MAdJo aide"))
+                val request = "  MAdJo aide"
+                CatalogueContent(CatalogueUiState.Content(
+                    emptyList(), CatalogueCriteria(query = request), madjoRequest = true,
+                    madjoRequestText = request, madjoConversation = MadjoConversationEngine.start(request),
+                ))
             }
         }
         composeRule.onNodeWithTag("catalogue-search").assertIsDisplayed()
         composeRule.onNodeWithTag("catalogue-search").assertTextEquals("  MAdJo aide")
-        composeRule.onNodeWithText("Madjo sera bientôt disponible").assertDoesNotExist()
+        composeRule.onAllNodesWithText("Madjo sera bientôt disponible").assertCountEquals(0)
         composeRule.onNodeWithText("  MAdJo aide").assertIsDisplayed()
+        composeRule.onNodeWithTag("madjo-message-list").assertIsDisplayed()
+        composeRule.onNodeWithTag("madjo-answer-tea").assertIsDisplayed()
+        composeRule.onNodeWithTag("madjo-recommendations").assertIsDisplayed()
         composeRule.onAllNodesWithText("Sencha").assertCountEquals(0)
     }
 

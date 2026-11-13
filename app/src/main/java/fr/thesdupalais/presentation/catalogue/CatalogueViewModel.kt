@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import fr.thesdupalais.data.database.ReferenceEntity
 import fr.thesdupalais.data.database.TeaDao
 import fr.thesdupalais.data.database.TeaWithCatalogData
+import fr.thesdupalais.domain.madjo.MadjoConversationEngine
+import fr.thesdupalais.domain.madjo.MadjoConversationState
+import fr.thesdupalais.domain.madjo.MadjoQuestionId
 import java.text.Normalizer
 import java.util.Locale
 import java.util.UUID
@@ -62,7 +65,7 @@ data class CatalogueFilterOptions(
 
 sealed interface CatalogueUiState {
     data object Loading : CatalogueUiState
-    data class Empty(val criteria: CatalogueCriteria = CatalogueCriteria(), val options: CatalogueFilterOptions = CatalogueFilterOptions(), val madjoRequest: Boolean = false, val madjoRequestText: String? = null) : CatalogueUiState
+    data class Empty(val criteria: CatalogueCriteria = CatalogueCriteria(), val options: CatalogueFilterOptions = CatalogueFilterOptions(), val madjoRequest: Boolean = false, val madjoRequestText: String? = null, val madjoConversation: MadjoConversationState? = null) : CatalogueUiState
     data class Content(
         val teas: List<CatalogueTea>,
         val criteria: CatalogueCriteria = CatalogueCriteria(),
@@ -70,6 +73,7 @@ sealed interface CatalogueUiState {
         val madjoRequest: Boolean = false,
         val noResults: Boolean = false,
         val madjoRequestText: String? = null,
+        val madjoConversation: MadjoConversationState? = null,
     ) : CatalogueUiState
 }
 
@@ -80,14 +84,23 @@ enum class TasteRatingFilter(val label: String) {
 
 class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     private val criteria = MutableStateFlow(CatalogueCriteria())
-    private val madjoRequestText = MutableStateFlow<String?>(null)
+    private val madjoConversation = MutableStateFlow<MadjoConversationState?>(null)
     val currentCriteria get() = criteria.value
 
     fun setQuery(query: String) { criteria.value = criteria.value.copy(query = query) }
     fun submitQuery() {
-        madjoRequestText.value = criteria.value.query.takeIf(::containsMadjoInvocation)
+        val query = criteria.value.query
+        madjoConversation.value = query.takeIf(::containsMadjoInvocation)?.let(MadjoConversationEngine::start)
     }
-    fun dismissMadjo() { madjoRequestText.value = null }
+    fun submitMadjoAnswer(questionId: MadjoQuestionId, answer: String) {
+        madjoConversation.value?.let { current ->
+            madjoConversation.value = MadjoConversationEngine.submitAnswer(current, questionId, answer)
+        }
+    }
+    fun requestMadjoRecommendations() {
+        madjoConversation.value?.let { current -> madjoConversation.value = MadjoConversationEngine.requestRecommendations(current) }
+    }
+    fun dismissMadjo() { madjoConversation.value = null }
     fun setCategories(ids: Set<UUID>) { criteria.value = criteria.value.copy(categoryIds = ids) }
     fun setCountries(ids: Set<UUID>) { criteria.value = criteria.value.copy(countryIds = ids) }
     fun setStatuses(ids: Set<UUID>, includeUnspecified: Boolean) {
@@ -102,14 +115,14 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
         categoryIds = emptySet(), countryIds = emptySet(), statusIds = emptySet(), includeUnspecifiedStatus = false,
         aromaticProfileIds = emptySet(), badgeIds = emptySet(), containerIds = emptySet(), momentIds = emptySet(), tasteRating = TasteRatingFilter.ALL,
     ) }
-    fun resetAll() { criteria.value = CatalogueCriteria(); madjoRequestText.value = null }
+    fun resetAll() { criteria.value = CatalogueCriteria(); madjoConversation.value = null }
 
-    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoRequestText) { rows, current, submittedMadjoRequest ->
+    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoConversation) { rows, current, conversation ->
         val allTeas = rows.map(TeaWithCatalogData::toCatalogueTea)
         val options = rows.toFilterOptions()
-        if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, submittedMadjoRequest != null, submittedMadjoRequest)
-        if (submittedMadjoRequest != null) {
-            return@combine CatalogueUiState.Content(emptyList(), current, options, madjoRequest = true, madjoRequestText = submittedMadjoRequest)
+        if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, conversation != null, conversation?.initialRequest, conversation)
+        if (conversation != null) {
+            return@combine CatalogueUiState.Content(emptyList(), current, options, madjoRequest = true, madjoRequestText = conversation.initialRequest, madjoConversation = conversation)
         }
         val visible = allTeas.filter { tea -> matchesCatalogueTea(tea, current) }
         CatalogueUiState.Content(visible, current, options, noResults = visible.isEmpty())
