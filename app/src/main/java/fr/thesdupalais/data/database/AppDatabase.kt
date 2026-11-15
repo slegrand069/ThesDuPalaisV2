@@ -20,8 +20,11 @@ import androidx.room.TypeConverters
         TeaPhotoEntity::class,
         ImportedDatasetEntity::class,
         BackupOperationMarkerEntity::class,
+        SemanticConceptEntity::class,
+        SemanticExpressionEntity::class,
+        SemanticRelationEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)
@@ -34,4 +37,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun teaPhotoDao(): TeaPhotoDao
     abstract fun importedDatasetDao(): ImportedDatasetDao
     abstract fun backupOperationMarkerDao(): BackupOperationMarkerDao
+    abstract fun semanticDictionaryDao(): SemanticDictionaryDao
 }

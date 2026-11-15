@@ -17,6 +17,7 @@ import fr.thesdupalais.domain.madjo.MadjoRecommendationOutcome
 import fr.thesdupalais.domain.madjo.MadjoReference
 import fr.thesdupalais.domain.madjo.MadjoTeaProfile
 import fr.thesdupalais.domain.madjo.MadjoVocabulary
+import fr.thesdupalais.domain.semantics.SemanticDictionarySnapshot
 import fr.thesdupalais.domain.model.ReferenceValue
 import fr.thesdupalais.domain.references.StandardReferenceSeeds
 import java.text.Normalizer
@@ -25,6 +26,8 @@ import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
 data class CatalogueTea(
@@ -48,6 +51,7 @@ data class CatalogueTea(
     val countryRefs: List<MadjoReference> = emptyList(),
     val regionRefs: List<MadjoReference> = emptyList(),
     val aromaRefs: List<MadjoReference> = emptyList(),
+    val aromaticProfileRefs: List<MadjoReference> = emptyList(),
     val momentRefs: List<MadjoReference> = emptyList(),
     val stockMilliGrams: Long? = null,
     val tastingCount: Int = 0,
@@ -117,7 +121,7 @@ enum class TasteRatingFilter(val label: String) {
 
 enum class StockFilter(val label: String) { ALL("Tous"), UNSPECIFIED("Non renseigné"), EMPTY("Épuisé"), LOW("Faible"), IMPORTANT("Important") }
 
-class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
+class CatalogueViewModel(teaDao: TeaDao, private val semanticDictionary: Flow<SemanticDictionarySnapshot> = flowOf(SemanticDictionarySnapshot())) : ViewModel() {
     private val criteria = MutableStateFlow(CatalogueCriteria())
     private val madjoConversation = MutableStateFlow<MadjoConversationState?>(null)
     private data class ResultsRequest(val criteria: MadjoRecommendationCriteria, val acceptedRelaxations: List<MadjoCriterion> = emptyList())
@@ -202,11 +206,11 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     ) }
     fun resetAll() { criteria.value = CatalogueCriteria(); madjoConversation.value = null; madjoResultsRequest.value = null }
 
-    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoConversation, madjoResultsRequest) { rows, current, conversation, resultsRequest ->
+    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoConversation, madjoResultsRequest, semanticDictionary) { rows, current, conversation, resultsRequest, semanticSnapshot ->
         val allTeas = rows.map(TeaWithCatalogData::toCatalogueTea)
         val recommendationProfiles = allTeas.map(CatalogueTea::toMadjoTeaProfile)
         val options = rows.toFilterOptions()
-        val madjoVocabulary = rows.toMadjoVocabulary(options)
+        val madjoVocabulary = rows.toMadjoVocabulary(options, semanticSnapshot)
         val madjoResults = resultsRequest?.let { MadjoRecommendationEngine.recommend(recommendationProfiles, it.criteria, it.acceptedRelaxations) }
         val madjoRequest = conversation != null && resultsRequest == null
         if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, madjoRequest, conversation?.initialRequest, conversation, madjoVocabulary, madjoResults)
@@ -226,11 +230,11 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), CatalogueUiState.Loading)
 }
 
-class CatalogueViewModelFactory(private val teaDao: TeaDao) : ViewModelProvider.Factory {
+class CatalogueViewModelFactory(private val teaDao: TeaDao, private val semanticDictionary: Flow<SemanticDictionarySnapshot> = flowOf(SemanticDictionarySnapshot())) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(CatalogueViewModel::class.java.isAssignableFrom(modelClass))
-        return CatalogueViewModel(teaDao) as T
+        return CatalogueViewModel(teaDao, semanticDictionary) as T
     }
 }
 
@@ -317,7 +321,7 @@ private fun List<TeaWithCatalogData>.toFilterOptions(): CatalogueFilterOptions {
     )
 }
 
-private fun List<TeaWithCatalogData>.toMadjoVocabulary(options: CatalogueFilterOptions): MadjoVocabulary {
+private fun List<TeaWithCatalogData>.toMadjoVocabulary(options: CatalogueFilterOptions, semanticDictionary: SemanticDictionarySnapshot): MadjoVocabulary {
     fun ReferenceEntity.toMadjoReference() = MadjoReference(id.toString(), semanticKey, label, parentCountryId?.toString())
     fun ReferenceValue.toMadjoReference() = MadjoReference(id.toString(), semanticKey, label, parentCountryId?.toString())
     val activeCategories = options.categories.map(ReferenceEntity::toMadjoReference)
@@ -326,6 +330,7 @@ private fun List<TeaWithCatalogData>.toMadjoVocabulary(options: CatalogueFilterO
         categories = (StandardReferenceSeeds.categories.map(ReferenceValue::toMadjoReference) + activeCategories).distinctBy { it.id },
         categoryOptions = activeCategories,
         aromas = options.aromas.map(ReferenceEntity::toMadjoReference),
+        aromaticProfiles = options.aromaticProfiles.map(ReferenceEntity::toMadjoReference),
         moments = (StandardReferenceSeeds.moments.map(ReferenceValue::toMadjoReference) + activeMoments).distinctBy { it.id },
         momentOptions = activeMoments,
         countries = options.countries.map(ReferenceEntity::toMadjoReference),
@@ -335,6 +340,7 @@ private fun List<TeaWithCatalogData>.toMadjoVocabulary(options: CatalogueFilterO
         availableStockCount = count { it.tea.stockMilliGrams != null && it.tea.stockMilliGrams > 0L },
         outOfStockCount = count { it.tea.stockMilliGrams == 0L },
         unknownStockCount = count { it.tea.stockMilliGrams == null || it.tea.stockMilliGrams < 0L },
+        semanticDictionary = semanticDictionary,
     )
 }
 
@@ -359,6 +365,7 @@ internal fun TeaWithCatalogData.toCatalogueTea(): CatalogueTea = CatalogueTea(
     countryRefs = countries.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
     regionRefs = regions.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
     aromaRefs = aromas.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
+    aromaticProfileRefs = aromaticProfiles.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
     momentRefs = moments.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
     stockMilliGrams = tea.stockMilliGrams,
     tastingCount = tastings.size,
@@ -374,6 +381,7 @@ internal fun CatalogueTea.toMadjoTeaProfile(): MadjoTeaProfile = MadjoTeaProfile
     countries = countryRefs,
     regions = regionRefs,
     aromas = aromaRefs,
+    aromaticProfiles = aromaticProfileRefs,
     moments = momentRefs,
     tasteRating = tasteRating,
     stockMilliGrams = stockMilliGrams,

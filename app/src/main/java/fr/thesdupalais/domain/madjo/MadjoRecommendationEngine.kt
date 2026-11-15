@@ -15,6 +15,7 @@ data class MadjoTeaProfile(
     val countries: List<MadjoReference> = emptyList(),
     val regions: List<MadjoReference> = emptyList(),
     val aromas: List<MadjoReference> = emptyList(),
+    val aromaticProfiles: List<MadjoReference> = emptyList(),
     val moments: List<MadjoReference> = emptyList(),
     val tasteRating: Double? = null,
     val stockMilliGrams: Long? = null,
@@ -189,13 +190,19 @@ object MadjoRecommendationEngine {
     private fun matches(tea: MadjoTeaProfile, criterion: MadjoCriterion): Boolean {
         val refId = criterion.referenceId
         return when (criterion.concept) {
-            "category" -> refId?.let { tea.categoryId == it } ?: valueMatches(criterion.value, tea.categoryKey, tea.categoryLabel)
+            "category" -> criterion.semanticExpansions.any { alternative ->
+                alternative.referenceId?.let { tea.categoryId == it } == true || alternative.businessValues.any { valueMatches(it, tea.categoryKey, tea.categoryLabel) }
+            } || (refId?.let { tea.categoryId == it } ?: valueMatches(criterion.value, tea.categoryKey, tea.categoryLabel))
             "beverage_type" -> when (criterion.value.lowercase(Locale.ROOT)) {
                 "infusion" -> normalize(tea.categoryKey.orEmpty()) == "infusion" || normalize(tea.categoryLabel) in setOf("infusion", "tisane")
                 "tea" -> normalize(tea.categoryKey.orEmpty()) != "infusion" && normalize(tea.categoryLabel) !in setOf("infusion", "tisane")
                 else -> false
             }
-            "aroma" -> refMatches(refId, criterion.value, tea.aromas)
+            "aroma" -> (refMatches(refId, criterion.value, tea.aromas) || criterion.semanticExpansions.any { alternative ->
+                val refs = if (alternative.businessConcept == "aromatic_profile") tea.aromaticProfiles else tea.aromas
+                (alternative.referenceId != null && refs.any { it.id == alternative.referenceId }) ||
+                    refs.any { ref -> alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) } }
+            })
             "moment" -> refMatches(refId, criterion.value, tea.moments)
             "country" -> refMatches(refId, criterion.value, tea.countries)
             "region" -> refMatches(refId, criterion.value, tea.regions)
@@ -204,6 +211,7 @@ object MadjoRecommendationEngine {
                 "available" -> tea.stockState == MadjoStockState.AVAILABLE
                 "out_of_stock" -> tea.stockState == MadjoStockState.OUT_OF_STOCK
                 "unknown" -> tea.stockState == MadjoStockState.UNKNOWN
+                "abundant" -> tea.stockMilliGrams != null && tea.stockMilliGrams >= 50_000L
                 else -> false
             }
             "tasting_frequency" -> tea.tastingCount > 0
@@ -235,17 +243,31 @@ object MadjoRecommendationEngine {
 
     private fun explain(tea: MadjoTeaProfile, criteria: MadjoRecommendationCriteria): String {
         val matched = mutableListOf<String>()
+        val semanticExplanations = mutableListOf<String>()
         criteria.criteria.filter { criterion -> criterion.dimension !in setOf(MadjoDimension.TASTE_RATING, MadjoDimension.STOCK) && matches(tea, criterion) }
             .forEach { criterion ->
                 when (criterion.concept) {
                     "category", "beverage_type" -> if (tea.categoryLabel !in matched) matched += tea.categoryLabel
-                    "aroma" -> tea.aromas.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
+                    "aroma" -> {
+                        val actual = (tea.aromas + tea.aromaticProfiles).firstNotNullOfOrNull { ref ->
+                            val expansion = criterion.semanticExpansions.firstOrNull { alternative ->
+                                alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+                            }
+                            if (criterion.referenceId == ref.id || expansion != null) ref to expansion else null
+                        }
+                        actual?.first?.label?.let { label ->
+                            if (actual.second?.relation == MadjoRelation.SPECIALIZATION) {
+                                val requested = criterion.displayValue?.lowercase(Locale.FRENCH) ?: "profil aromatique"
+                                semanticExplanations += "Correspond à votre recherche $requested grâce à son arôme $label."
+                            } else matched += label
+                        }
+                    }
                     "moment" -> tea.moments.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
                     "country" -> tea.countries.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
                     "region" -> tea.regions.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
                 }
             }
-        val sentences = mutableListOf<String>()
+        val sentences = semanticExplanations.toMutableList()
         if (matched.isNotEmpty()) sentences += "Correspond à ta demande de ${matched.distinct().joinToString(", ")}."
         criteria.criteria.filter { it.dimension == MadjoDimension.TASTING_HISTORY && matches(tea, it) }.forEach { criterion ->
             sentences += when (criterion.concept) {

@@ -158,7 +158,7 @@ fun AppNavigation(container: AppContainer) {
         ) {
             composable(MainDestination.CATALOGUE.route) {
                 val catalogueViewModel: CatalogueViewModel = viewModel(
-                    factory = CatalogueViewModelFactory(container.database.teaDao()),
+                    factory = CatalogueViewModelFactory(container.database.teaDao(), container.semanticDictionaryRepository.snapshot),
                 )
                 CatalogueScreen(
                     viewModel = catalogueViewModel,

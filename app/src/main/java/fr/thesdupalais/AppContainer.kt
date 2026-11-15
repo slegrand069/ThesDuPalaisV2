@@ -8,12 +8,15 @@ import fr.thesdupalais.data.database.MIGRATION_2_3
 import fr.thesdupalais.data.database.MIGRATION_3_4
 import fr.thesdupalais.data.database.MIGRATION_4_5
 import fr.thesdupalais.data.database.MIGRATION_5_6
+import fr.thesdupalais.data.database.MIGRATION_6_7
 import fr.thesdupalais.data.importer.CollectionImporter
 import fr.thesdupalais.data.backup.BackupArchiveExporter
 import fr.thesdupalais.data.backup.BackupArchivePreviewReader
 import fr.thesdupalais.data.backup.BackupArchiveMergePreviewReader
 import fr.thesdupalais.data.database.RoomReferenceRepository
 import fr.thesdupalais.data.database.StandardReferenceSeeder
+import fr.thesdupalais.data.database.SemanticDictionarySeeder
+import fr.thesdupalais.data.database.SemanticDictionaryRepository
 import fr.thesdupalais.data.database.TeaRepository
 import fr.thesdupalais.data.database.ArticleRepository
 import fr.thesdupalais.data.importer.ArticleJsonImporter
@@ -45,7 +48,7 @@ class AppContainer(context: Context) : FirstRunOperations {
         context.applicationContext,
         AppDatabase::class.java,
         "thes-du-palais.db",
-    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
+    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build()
 
     val operationJournal = DurableBackupOperationJournal(
         root = File(context.noBackupFilesDir, "backup-operations"),
@@ -54,6 +57,7 @@ class AppContainer(context: Context) : FirstRunOperations {
     val operationWriteCoordinator = BackupOperationWriteCoordinator { inspectPendingOperation() }
     val preferences = LocalPreferencesRepository(context, operationWriteCoordinator)
     val referenceRepository = RoomReferenceRepository(database, operationWriteCoordinator)
+    val semanticDictionaryRepository = SemanticDictionaryRepository(database, operationWriteCoordinator)
     val teaRepository = TeaRepository(database, operationWriteCoordinator)
     val articleRepository = ArticleRepository(database, operationWriteCoordinator)
     val articleJsonImporter = ArticleJsonImporter(articleRepository)
@@ -98,6 +102,13 @@ class AppContainer(context: Context) : FirstRunOperations {
             recovery.detail ?: "Une opération inachevée doit être récupérée avant l’initialisation.",
         )
         StandardReferenceSeeder(database, operationWriteCoordinator).seed()
+        SemanticDictionarySeeder(database, operationWriteCoordinator).seed()
+    }
+
+    /** Adds missing bundled semantic rows for upgrades without resetting or rewriting local edits. */
+    suspend fun initializeSemanticDictionary() {
+        val recovery = recoverPendingOperation()
+        if (!recovery.blocksWrites) SemanticDictionarySeeder(database, operationWriteCoordinator).seed()
     }
 
     /** Performs one bounded recovery pass. It never loops; an incomplete pass remains write-blocking. */

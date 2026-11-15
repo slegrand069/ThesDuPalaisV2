@@ -142,3 +142,17 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         )
     }
 }
+
+/** Adds local semantic vocabulary tables without touching tea, reference, tasting, or backup rows. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS `semantic_concepts` (`id` TEXT NOT NULL, `domain` TEXT NOT NULL, `label` TEXT NOT NULL, `active` INTEGER NOT NULL, `businessDimension` TEXT, `businessConcept` TEXT, `businessValue` TEXT, PRIMARY KEY(`id`))""")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_semantic_concepts_domain_active` ON `semantic_concepts` (`domain`, `active`)")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS `semantic_expressions` (`id` TEXT NOT NULL, `conceptId` TEXT NOT NULL, `expression` TEXT NOT NULL, `normalizedForm` TEXT NOT NULL, `isPrimary` INTEGER NOT NULL, `active` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conceptId`) REFERENCES `semantic_concepts`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT)""")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_semantic_expressions_conceptId_normalizedForm` ON `semantic_expressions` (`conceptId`, `normalizedForm`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_semantic_expressions_normalizedForm_active` ON `semantic_expressions` (`normalizedForm`, `active`)")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS `semantic_relations` (`id` TEXT NOT NULL, `sourceConceptId` TEXT NOT NULL, `targetConceptId` TEXT NOT NULL, `type` TEXT NOT NULL, `active` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`sourceConceptId`) REFERENCES `semantic_concepts`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT, FOREIGN KEY(`targetConceptId`) REFERENCES `semantic_concepts`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT)""")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_semantic_relations_sourceConceptId_targetConceptId_type` ON `semantic_relations` (`sourceConceptId`, `targetConceptId`, `type`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_semantic_relations_targetConceptId` ON `semantic_relations` (`targetConceptId`)")
+    }
+}

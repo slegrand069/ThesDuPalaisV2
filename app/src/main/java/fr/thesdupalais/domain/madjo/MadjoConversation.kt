@@ -2,6 +2,12 @@ package fr.thesdupalais.domain.madjo
 
 import java.text.Normalizer
 import java.util.Locale
+import fr.thesdupalais.domain.semantics.MadjoSemanticResolver
+import fr.thesdupalais.domain.semantics.SemanticDictionarySnapshot
+import fr.thesdupalais.domain.semantics.SemanticMatch
+import fr.thesdupalais.domain.semantics.SemanticAmbiguity
+import fr.thesdupalais.domain.semantics.SemanticDomain
+import fr.thesdupalais.domain.semantics.SemanticRelationType
 
 enum class MadjoSpeaker { MADJO, USER }
 data class MadjoMessage(val id: Int, val speaker: MadjoSpeaker, val text: String)
@@ -10,8 +16,8 @@ enum class MadjoDimension { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, STO
 enum class MadjoQuestionId { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, STOCK, CLARIFICATION }
 enum class MadjoCriterionKind { ABSOLUTE_CONSTRAINT, PREFERENCE }
 enum class MadjoCriterionSource { INITIAL_REQUEST, USER_ANSWER }
-enum class MadjoRelation { DIRECT_SYNONYM, SEMANTIC_ASSOCIATION }
-enum class MadjoAmbiguityReason { UNKNOWN_REFERENCE_VALUE, CONFLICTING_VALUES }
+enum class MadjoRelation { DIRECT_SYNONYM, SPECIALIZATION, SEMANTIC_ASSOCIATION }
+enum class MadjoAmbiguityReason { UNKNOWN_REFERENCE_VALUE, CONFLICTING_VALUES, AMBIGUOUS_SEMANTIC_CONCEPT }
 
 data class MadjoReference(
     val id: String,
@@ -24,6 +30,7 @@ data class MadjoVocabulary(
     val categories: List<MadjoReference> = emptyList(),
     val categoryOptions: List<MadjoReference> = categories,
     val aromas: List<MadjoReference> = emptyList(),
+    val aromaticProfiles: List<MadjoReference> = emptyList(),
     val moments: List<MadjoReference> = emptyList(),
     val momentOptions: List<MadjoReference> = moments,
     val countries: List<MadjoReference> = emptyList(),
@@ -36,6 +43,18 @@ data class MadjoVocabulary(
     val usefulQuestionIds: Set<MadjoQuestionId>? = null,
     val candidateOptionIds: Map<MadjoQuestionId, Set<String>>? = null,
     val promptVariant: Int = 0,
+    val semanticDictionary: SemanticDictionarySnapshot = SemanticDictionarySnapshot(),
+)
+
+data class MadjoSemanticAlternative(
+    val conceptId: String,
+    val label: String,
+    val businessValues: Set<String>,
+    val referenceId: String? = null,
+    val relation: MadjoRelation = MadjoRelation.DIRECT_SYNONYM,
+    val businessDimension: String? = null,
+    val businessConcept: String? = null,
+    val businessValue: String? = null,
 )
 
 data class MadjoCriterion(
@@ -48,6 +67,7 @@ data class MadjoCriterion(
     val displayValue: String? = null,
     val matchedText: String? = null,
     val relation: MadjoRelation = MadjoRelation.DIRECT_SYNONYM,
+    val semanticExpansions: List<MadjoSemanticAlternative> = emptyList(),
 )
 
 data class MadjoAmbiguity(
@@ -59,6 +79,7 @@ data class MadjoAmbiguity(
     val source: MadjoCriterionSource = MadjoCriterionSource.INITIAL_REQUEST,
     val candidateReferenceIds: List<String> = emptyList(),
     val candidateValues: List<String> = emptyList(),
+    val semanticCandidates: List<MadjoSemanticAlternative> = emptyList(),
 )
 
 /** Flat, traceable contract for M3.2. Criteria on each dimension can be combined. */
@@ -436,6 +457,20 @@ object MadjoConversationEngine {
 
     private fun clarificationQuestion(ambiguity: MadjoAmbiguity, v: MadjoVocabulary): MadjoQuestion {
         val candidates = when {
+            ambiguity.reason == MadjoAmbiguityReason.AMBIGUOUS_SEMANTIC_CONCEPT -> ambiguity.semanticCandidates.map { candidate ->
+                MadjoAnswerOption(candidate.conceptId, candidate.label, listOf(MadjoCriterion(
+                    dimension = ambiguity.dimension,
+                    concept = candidate.businessConcept ?: "semantic",
+                    value = candidate.businessValue ?: candidate.conceptId,
+                    kind = ambiguity.intendedKind ?: MadjoCriterionKind.ABSOLUTE_CONSTRAINT,
+                    source = ambiguity.source,
+                    referenceId = candidate.referenceId,
+                    displayValue = candidate.label,
+                    matchedText = ambiguity.phrase,
+                    relation = candidate.relation,
+                    semanticExpansions = listOf(candidate),
+                )))
+            }
             ambiguity.detail == "beverage_type" -> listOf(
                 MadjoAnswerOption("beverage_type:tea", "Thé", listOf(criterion(MadjoDimension.TYPE_COLOR, "beverage_type", "tea", ambiguity.intendedKind ?: MadjoCriterionKind.ABSOLUTE_CONSTRAINT))),
                 MadjoAnswerOption("beverage_type:infusion", "Infusion", listOf(criterion(MadjoDimension.TYPE_COLOR, "beverage_type", "infusion", ambiguity.intendedKind ?: MadjoCriterionKind.ABSOLUTE_CONSTRAINT))),
@@ -457,6 +492,7 @@ object MadjoConversationEngine {
         }
         val options = when {
             ambiguity.reason == MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE -> emptyList()
+            ambiguity.reason == MadjoAmbiguityReason.AMBIGUOUS_SEMANTIC_CONCEPT -> candidates
             ambiguity.detail == "category" -> candidates.filter { option -> option.value.substringAfter(':') in ambiguity.candidateReferenceIds }
             ambiguity.detail == "beverage_type" -> candidates
             ambiguity.detail == "stock" -> candidates.filter { option -> option.value.substringAfter(':') in ambiguity.candidateValues }
@@ -465,6 +501,7 @@ object MadjoConversationEngine {
         val label = when (ambiguity.reason) {
             MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE -> "Je ne trouve pas « ${ambiguity.phrase} » dans le référentiel de la collection. Pouvez-vous préciser ou reformuler ce critère ?"
             MadjoAmbiguityReason.CONFLICTING_VALUES -> "J’ai compris plusieurs choix incompatibles pour ${ambiguity.phrase}. Lequel voulez-vous garder ?"
+            MadjoAmbiguityReason.AMBIGUOUS_SEMANTIC_CONCEPT -> "« ${ambiguity.phrase} » peut désigner plusieurs concepts. Lequel voulez-vous dire ?"
         }
         return MadjoQuestion(MadjoQuestionId.CLARIFICATION, ambiguity.dimension, label, options)
     }
@@ -477,6 +514,7 @@ object MadjoConversationEngine {
 
     private fun extract(text: String, vocabulary: MadjoVocabulary, source: MadjoCriterionSource): Extraction {
         val normalized = normalize(text)
+        val semanticResolution = MadjoSemanticResolver.resolve(text, vocabulary.semanticDictionary)
         val output = mutableListOf<MadjoCriterion>()
         val ambiguities = mutableListOf<MadjoAmbiguity>()
         val known = mutableSetOf<String>()
@@ -566,8 +604,112 @@ object MadjoConversationEngine {
             ambiguities += MadjoAmbiguity(MadjoDimension.MOMENT, "après un repas", MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE, "moment", nature(MadjoDimension.MOMENT, normalized, "après un repas", source), source)
         }
 
-        return Extraction(mergeDistinct(output), mergeAmbiguities(emptyList(), ambiguities), known)
+        val semanticAmbiguities = semanticResolution.ambiguities.mapNotNull { ambiguity ->
+            val dimension = semanticDimension(ambiguity.domain, ambiguity.concepts.firstOrNull()) ?: return@mapNotNull null
+            val candidates = ambiguity.concepts.mapNotNull { concept -> semanticAlternative(concept, ambiguity.domain, vocabulary) }
+            MadjoAmbiguity(
+                dimension = dimension,
+                phrase = ambiguity.phrase,
+                reason = MadjoAmbiguityReason.AMBIGUOUS_SEMANTIC_CONCEPT,
+                detail = "semantic:${ambiguity.domain.name.lowercase(Locale.ROOT)}",
+                intendedKind = nature(dimension, normalized, ambiguity.phrase, source),
+                source = source,
+                semanticCandidates = candidates,
+            )
+        }
+        val replacedDimensions = semanticAmbiguities.map { it.dimension }.toSet()
+        val semanticCriteria = semanticCriteria(semanticResolution.matches, vocabulary, normalized, source)
+        val finalCriteria = mergeDistinct(output.filterNot { it.dimension in replacedDimensions } + semanticCriteria)
+        val finalAmbiguities = mergeAmbiguities(
+            ambiguities.filterNot { it.dimension in replacedDimensions },
+            semanticAmbiguities,
+        )
+        return Extraction(finalCriteria, finalAmbiguities, finalCriteria.map { it.concept }.toSet())
     }
+
+    private fun semanticCriteria(
+        matches: List<SemanticMatch>,
+        vocabulary: MadjoVocabulary,
+        normalizedRequest: String,
+        source: MadjoCriterionSource,
+    ): List<MadjoCriterion> {
+        val roots = matches.filter { it.relationType == null }
+        return roots.mapNotNull { root ->
+            val group = matches.filter { it.normalizedExpression == root.normalizedExpression && it.matchedExpression == root.matchedExpression &&
+                (it.concept.id == root.concept.id || it.relationType == SemanticRelationType.SPECIALIZATION) }
+            val mapped = group.firstOrNull { it.concept.businessDimension != null && it.concept.businessConcept != null && it.concept.businessValue != null }
+                ?: return@mapNotNull null
+            val dimension = semanticDimension(root.concept.domain, mapped.concept) ?: return@mapNotNull null
+            val alternatives = group.mapNotNull { semanticAlternative(it.concept, root.concept.domain, vocabulary, it.relationType) }
+            if (alternatives.isEmpty()) return@mapNotNull null
+            val value = root.concept.businessValue ?: mapped.concept.businessValue ?: root.concept.id
+            MadjoCriterion(
+                dimension = dimension,
+                concept = mapped.concept.businessConcept ?: root.concept.businessConcept.orEmpty(),
+                value = value,
+                kind = nature(dimension, normalizedRequest, root.matchedExpression, source),
+                source = source,
+                displayValue = root.concept.label,
+                matchedText = root.matchedExpression,
+                semanticExpansions = alternatives,
+            )
+        }.distinctBy { listOf(it.dimension.name, it.concept, it.value, it.kind.name, it.matchedText.orEmpty()) }
+    }
+
+    private fun semanticAlternative(
+        concept: fr.thesdupalais.domain.semantics.SemanticConcept,
+        domain: SemanticDomain,
+        vocabulary: MadjoVocabulary,
+        relationType: SemanticRelationType? = null,
+    ): MadjoSemanticAlternative? {
+        val mappingDimension = concept.businessDimension
+        val mappingConcept = concept.businessConcept
+        val mappingValue = concept.businessValue
+        if (mappingDimension == null || mappingConcept == null || mappingValue == null) return null
+        val expressions = vocabulary.semanticDictionary.expressions.filter { it.active && it.conceptId == concept.id }
+            .map { it.normalizedForm.ifBlank { MadjoSemanticResolver.normalize(it.expression) } }
+        val values = (expressions + mappingValue + concept.label).toSet()
+        val referenceCandidates = referencesFor(domain, mappingDimension, mappingConcept, vocabulary).filter { reference ->
+            values.any { value -> semanticValueMatches(value, reference.semanticKey, reference.label) }
+        }
+        return MadjoSemanticAlternative(
+            conceptId = concept.id,
+            label = concept.label,
+            businessValues = values,
+            referenceId = referenceCandidates.singleOrNull()?.id,
+            businessDimension = mappingDimension,
+            businessConcept = mappingConcept,
+            businessValue = mappingValue,
+            relation = if (relationType == SemanticRelationType.SPECIALIZATION) MadjoRelation.SPECIALIZATION else MadjoRelation.DIRECT_SYNONYM,
+        )
+    }
+
+    private fun referencesFor(domain: SemanticDomain, dimension: String, concept: String, vocabulary: MadjoVocabulary): List<MadjoReference> = when {
+        dimension == "TYPE_COLOR" -> vocabulary.categories
+        concept == "aroma" || domain == SemanticDomain.AROMA -> vocabulary.aromas
+        concept == "aromatic_profile" || domain == SemanticDomain.AROMATIC_PROFILE -> vocabulary.aromaticProfiles
+        concept == "country" -> vocabulary.countries
+        concept == "region" -> vocabulary.regions
+        concept == "moment" -> vocabulary.moments
+        else -> emptyList()
+    }
+
+    private fun semanticValueMatches(value: String, semanticKey: String?, label: String): Boolean {
+        val expected = MadjoSemanticResolver.normalize(value.replace('_', ' '))
+        return expected == MadjoSemanticResolver.normalize(semanticKey.orEmpty().replace('_', ' ')) ||
+            expected == MadjoSemanticResolver.normalize(label)
+    }
+
+    private fun semanticDimension(domain: SemanticDomain, concept: fr.thesdupalais.domain.semantics.SemanticConcept?): MadjoDimension? =
+        concept?.businessDimension?.let { runCatching { MadjoDimension.valueOf(it) }.getOrNull() } ?: when (domain) {
+            SemanticDomain.AROMA, SemanticDomain.AROMATIC_PROFILE -> MadjoDimension.AROMA
+            SemanticDomain.CATEGORY -> MadjoDimension.TYPE_COLOR
+            SemanticDomain.ORIGIN -> MadjoDimension.ORIGIN
+            SemanticDomain.MOMENT -> MadjoDimension.MOMENT
+            SemanticDomain.TASTE_RATING -> MadjoDimension.TASTE_RATING
+            SemanticDomain.STOCK -> MadjoDimension.STOCK
+            SemanticDomain.TASTING_HISTORY -> MadjoDimension.TASTING_HISTORY
+        }
 
     private fun mergeAnswerCriteria(
         current: List<MadjoCriterion>,
@@ -721,14 +863,18 @@ object MadjoConversationEngine {
         return unknownCategoryWords.firstOrNull { hasWord(normalized, it) }
     }
 
-    private fun mergeDistinct(items: List<MadjoCriterion>): List<MadjoCriterion> = items.distinctBy {
-        listOf(it.dimension.name, it.concept, it.referenceId ?: it.value, it.kind.name)
-    }
+    private fun mergeDistinct(items: List<MadjoCriterion>): List<MadjoCriterion> = items
+        .groupBy { listOf(it.dimension.name, it.concept, it.referenceId ?: it.value, it.kind.name) }
+        .values.map { same ->
+            val first = same.first()
+            first.copy(semanticExpansions = same.flatMap(MadjoCriterion::semanticExpansions).distinctBy(MadjoSemanticAlternative::conceptId))
+        }
 
     private fun mergeAmbiguities(existing: List<MadjoAmbiguity>, incoming: List<MadjoAmbiguity>): List<MadjoAmbiguity> =
         (existing + incoming).distinctBy { listOf(it.dimension.name, it.phrase.lowercase(Locale.ROOT), it.reason.name, it.detail) }
 
     private fun ambiguityResolvedBy(ambiguity: MadjoAmbiguity, concept: String): Boolean = when (ambiguity.detail.substringBefore(':')) {
+        "semantic" -> ambiguity.semanticCandidates.any { it.businessConcept == concept }
         "category" -> concept == "category"
         "beverage_type" -> concept == "beverage_type"
         "origin" -> concept in setOf("country", "region")

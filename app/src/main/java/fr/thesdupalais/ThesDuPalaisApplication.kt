@@ -14,6 +14,6 @@ class ThesDuPalaisApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
-        applicationScope.launch { container.recoverPendingOperation() }
+        applicationScope.launch { container.initializeSemanticDictionary() }
     }
 }
