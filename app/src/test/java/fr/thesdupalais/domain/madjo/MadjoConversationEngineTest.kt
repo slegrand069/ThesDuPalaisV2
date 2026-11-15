@@ -203,6 +203,52 @@ class MadjoConversationEngineTest {
         assertTrue(withoutChina.criteria.ambiguities.any { it.dimension == MadjoDimension.ORIGIN })
     }
 
+    @Test fun extractsFrequencyAndForgottenIntentWithoutTreatingNeverTastedAsForgotten() {
+        val frequent = MadjoConversationEngine.start("Madjo, je voudrais un thé que je bois souvent", vocabulary)
+            .criteria.criteria.single { it.concept == "tasting_frequency" }
+        assertEquals(MadjoDimension.TASTING_HISTORY, frequent.dimension)
+        assertEquals(MadjoCriterionKind.PREFERENCE, frequent.kind)
+        val mostTasted = MadjoConversationEngine.start("Quels sont mes thés les plus dégustés ?", vocabulary)
+        assertTrue(mostTasted.criteria.criteria.any { it.concept == "tasting_frequency" })
+
+        val forgotten = MadjoConversationEngine.start("Propose-moi un thé que je n’ai pas dégusté depuis longtemps", vocabulary)
+            .criteria.criteria.single { it.concept == "tasting_recency" }
+        assertEquals(MadjoCriterionKind.PREFERENCE, forgotten.kind)
+        val forgottenTea = MadjoConversationEngine.start("J’aimerais retrouver un thé oublié", vocabulary)
+        assertTrue(forgottenTea.criteria.criteria.any { it.concept == "tasting_recency" })
+        val longAgo = MadjoConversationEngine.start("Propose-moi un thé que je n'ai pas bu depuis longtemps", vocabulary)
+        assertTrue(longAgo.criteria.criteria.any { it.concept == "tasting_recency" })
+
+        val never = MadjoConversationEngine.start("Je voudrais un thé que je n’ai jamais dégusté", vocabulary)
+        assertFalse(never.criteria.criteria.any { it.dimension == MadjoDimension.TASTING_HISTORY })
+    }
+
+    @Test fun historyIntentCombinesWithExistingHardConstraints() {
+        val state = MadjoConversationEngine.start("Un thé vert du Japon que je bois souvent", vocabulary)
+        assertTrue(state.criteria.criteria.any { it.concept == "category" && it.value == "GREEN" && it.kind == MadjoCriterionKind.ABSOLUTE_CONSTRAINT })
+        assertTrue(state.criteria.criteria.any { it.concept == "country" && it.referenceId == japan.id && it.kind == MadjoCriterionKind.ABSOLUTE_CONSTRAINT })
+        assertTrue(state.criteria.criteria.any { it.concept == "tasting_frequency" && it.kind == MadjoCriterionKind.PREFERENCE })
+    }
+
+    @Test fun questionWordingVariesDeterministicallyAndHasEquivalentOptions() {
+        val variants = (0..3).map { variant ->
+            MadjoConversationEngine.start("Madjo", vocabulary.copy(promptVariant = variant)).currentQuestion!!
+        }
+        assertEquals(4, variants.map { it.prompt }.distinct().size)
+        assertTrue(variants.all { it.id == MadjoQuestionId.TYPE_COLOR && it.options == variants.first().options })
+        assertEquals(variants[2].prompt, MadjoConversationEngine.start("Madjo", vocabulary.copy(promptVariant = 2)).currentQuestion?.prompt)
+    }
+
+    @Test fun aNewMadjoRequestStartsWithoutThePreviousConversationCriteriaOrHistory() {
+        val previous = MadjoConversationEngine.start("Madjo, un thé vert du Japon", vocabulary)
+        val fresh = MadjoConversationEngine.start("Madjo, un thé noir", vocabulary)
+        assertTrue(previous.criteria.criteria.any { it.concept == "country" })
+        assertFalse(fresh.criteria.criteria.any { it.concept == "country" })
+        assertEquals("Madjo, un thé noir", fresh.initialRequest)
+        assertTrue(fresh.answers.isEmpty())
+        assertTrue(fresh.messages.none { it.text.contains("Japon") })
+    }
+
     @Test fun knownOriginIsNeverSelectedForASecondOriginQuestion() {
         val state = MadjoConversationEngine.start("Un thé vert du Japon", vocabulary)
         assertFalse(state.currentQuestion?.id == MadjoQuestionId.ORIGIN)

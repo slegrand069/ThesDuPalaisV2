@@ -196,6 +196,8 @@ data class TeaWithCatalogData(
         associateBy = Junction(value = TeaBadgeEntity::class, parentColumn = "teaId", entityColumn = "badgeRefId"),
     )
     val badges: List<ReferenceEntity>,
+    @Relation(parentColumn = "id", entityColumn = "teaId")
+    val tastings: List<TastingEntity> = emptyList(),
 )
 
 data class TeaWithDetailData(

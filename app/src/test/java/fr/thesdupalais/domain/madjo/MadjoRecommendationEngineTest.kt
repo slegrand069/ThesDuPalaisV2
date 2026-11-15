@@ -149,6 +149,49 @@ class MadjoRecommendationEngineTest {
         assertFalse(MadjoConversationEngine.requiresDialogue(ready))
     }
 
+    @Test fun tastingFrequencyAndRecencyRankOnlyRecordedTastings() {
+        val frequent = MadjoCriterion(MadjoDimension.TASTING_HISTORY, "tasting_frequency", "frequent", MadjoCriterionKind.PREFERENCE, MadjoCriterionSource.INITIAL_REQUEST)
+        val often = greenChinaFloral.copy(id = "often", tastingCount = 14, lastTastedAtEpochMillis = 500L, tasteRating = 7.0)
+        val rare = blackJapanFruity.copy(id = "rare", tastingCount = 2, lastTastedAtEpochMillis = 800L, tasteRating = 7.0)
+        val never = greenChinaUnknownStock.copy(id = "never", tastingCount = 0, lastTastedAtEpochMillis = null, tasteRating = 7.0)
+        val frequencyResult = MadjoRecommendationEngine.recommend(listOf(rare, never, often), MadjoRecommendationCriteria(listOf(frequent)))
+        assertEquals(listOf("often", "rare", "never"), frequencyResult.recommendations.map { it.tea.id })
+
+        val forgotten = frequent.copy(concept = "tasting_recency", value = "oldest_first")
+        val recent = often.copy(id = "recent", lastTastedAtEpochMillis = 900L)
+        val old = rare.copy(id = "old", lastTastedAtEpochMillis = 100L)
+        val recencyResult = MadjoRecommendationEngine.recommend(listOf(recent, never, old), MadjoRecommendationCriteria(listOf(forgotten)))
+        assertEquals(listOf("old", "recent", "never"), recencyResult.recommendations.map { it.tea.id })
+        assertTrue(recencyResult.recommendations.first().explanation.contains("plus longtemps"))
+        assertFalse(recencyResult.recommendations.last().explanation.contains("plus longtemps"))
+    }
+
+    @Test fun tastingHistoryPreferenceNeverWeakensExistingCategoryOrOriginConstraints() {
+        val categoryConstraint = criterion(MadjoDimension.TYPE_COLOR, "category", "GREEN", green, MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
+        val originConstraint = criterion(MadjoDimension.ORIGIN, "country", "CHINA", china, MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
+        val historyPreference = MadjoCriterion(MadjoDimension.TASTING_HISTORY, "tasting_frequency", "frequent", MadjoCriterionKind.PREFERENCE, MadjoCriterionSource.INITIAL_REQUEST)
+        val frequentMatch = greenChinaFloral.copy(id = "frequent", tastingCount = 20)
+        val frequentWrongOrigin = greenChinaUnknownStock.copy(id = "wrong-origin", tastingCount = 100, countries = listOf(japan))
+        val result = MadjoRecommendationEngine.recommend(
+            listOf(frequentMatch, frequentWrongOrigin, blackJapanFruity.copy(tastingCount = 200)),
+            MadjoRecommendationCriteria(listOf(categoryConstraint, originConstraint, historyPreference)),
+        )
+        assertEquals(listOf("frequent"), result.recommendations.map { it.tea.id })
+    }
+
+    @Test fun tenCandidatesWithNoMeaningfulDifferencesDoNotTriggerArbitraryFollowUpQuestions() {
+        val vocabulary = MadjoVocabulary(categories = listOf(green), categoryOptions = listOf(green))
+        val initial = MadjoConversationEngine.start("Madjo, un thé vert", vocabulary)
+        val sameCandidates = (1..10).map { tea("$it", "Vert $it", green, rating = 8.0) }
+        val evidence = MadjoRecommendationEngine.questionEvidence(sameCandidates, initial.criteria)
+        assertTrue(evidence.first.isEmpty())
+        val ready = MadjoConversationEngine.updateQuestionEvidence(
+            initial, vocabulary.copy(usefulQuestionIds = evidence.first, candidateOptionIds = evidence.second),
+        )
+        assertTrue(ready.recommendationReady)
+        assertTrue(ready.questionsAsked.isEmpty())
+    }
+
     @Test fun momentsMatchOnlyStoredReferencesAndDoNotInferTheine() {
         val criterion = criterion(MadjoDimension.MOMENT, "moment", "EVENING", evening, MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
         val result = MadjoRecommendationEngine.recommend(listOf(greenChinaFloral, greenChinaUnknownStock), MadjoRecommendationCriteria(listOf(criterion)))

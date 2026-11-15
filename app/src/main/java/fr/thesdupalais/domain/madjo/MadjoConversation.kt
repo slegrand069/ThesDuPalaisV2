@@ -6,7 +6,7 @@ import java.util.Locale
 enum class MadjoSpeaker { MADJO, USER }
 data class MadjoMessage(val id: Int, val speaker: MadjoSpeaker, val text: String)
 
-enum class MadjoDimension { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, STOCK }
+enum class MadjoDimension { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, STOCK, TASTING_HISTORY }
 enum class MadjoQuestionId { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, STOCK, CLARIFICATION }
 enum class MadjoCriterionKind { ABSOLUTE_CONSTRAINT, PREFERENCE }
 enum class MadjoCriterionSource { INITIAL_REQUEST, USER_ANSWER }
@@ -299,13 +299,14 @@ object MadjoConversationEngine {
             )
         }
         return state.copy(
-            currentQuestion = question,
+            currentQuestion = question.withFreshPrompt(state),
             questionsAsked = if (question.id in state.questionsAsked) state.questionsAsked else state.questionsAsked + question.id,
-            messages = state.messages + MadjoMessage(state.messages.size, MadjoSpeaker.MADJO, question.prompt),
+            messages = state.messages + MadjoMessage(state.messages.size, MadjoSpeaker.MADJO, question.withFreshPrompt(state).prompt),
         )
     }
 
     private fun isReady(state: MadjoConversationState): Boolean {
+        if (state.vocabulary.usefulQuestionIds?.isEmpty() == true) return true
         if (state.criteria.dimensions.size >= 2) return true
         val acceptedOptionalAnswers = state.answers.count { it.resolvedQuestion && it.interpretedValue?.startsWith("any:") == true }
         val acceptedSpecificAnswers = state.answers.any { it.resolvedQuestion && it.interpretedValue?.startsWith("any:") != true }
@@ -364,6 +365,15 @@ object MadjoConversationEngine {
         MadjoQuestionId.CLARIFICATION -> null
     }
 
+    private fun MadjoQuestion.withFreshPrompt(state: MadjoConversationState): MadjoQuestion {
+        val previousPrompt = state.messages.lastOrNull { it.speaker == MadjoSpeaker.MADJO }?.text ?: return this
+        if (prompt != previousPrompt) return this
+        return (1..4).asSequence()
+            .mapNotNull { offset -> questionFor(id, state.vocabulary.copy(promptVariant = state.vocabulary.promptVariant + offset))?.prompt }
+            .firstOrNull { it != previousPrompt }
+            ?.let { copy(prompt = it) } ?: this
+    }
+
     private fun typeQuestion(v: MadjoVocabulary): MadjoQuestion? {
         val options = v.categoryOptions.distinctBy { it.id }.map { ref ->
             val value = ref.semanticKey ?: normalize(ref.label).replace(' ', '_')
@@ -378,18 +388,18 @@ object MadjoConversationEngine {
         options.add(0, MadjoAnswerOption("beverage:tea", "Un thé", listOf(criterion(MadjoDimension.TYPE_COLOR, "beverage_type", "tea", MadjoCriterionKind.PREFERENCE))))
         options.add(1, MadjoAnswerOption("beverage:infusion", "Une infusion", listOf(criterion(MadjoDimension.TYPE_COLOR, "beverage_type", "infusion", MadjoCriterionKind.PREFERENCE))))
         options += anyOption(MadjoDimension.TYPE_COLOR)
-        val prompt = if (v.promptVariant % 2 == 0) "Quel type de boisson ou quelle couleur vous tente ?" else "Avez-vous une couleur ou un type de boisson en tête ?"
+        val prompt = listOf("Quel type de boisson ou quelle couleur vous tente ?", "Avez-vous une couleur ou un type de boisson en tête ?", "Vous avez envie d’un thé ou d’une infusion en particulier ?", "Quelle famille de thé ou d’infusion vous plairait ?")[Math.floorMod(v.promptVariant, 4)]
         return MadjoQuestion(MadjoQuestionId.TYPE_COLOR, MadjoDimension.TYPE_COLOR, prompt, options)
     }
 
     private fun aromaQuestion(v: MadjoVocabulary): MadjoQuestion? = v.aromas.takeIf { it.isNotEmpty() }?.let { values ->
-        MadjoQuestion(MadjoQuestionId.AROMA, MadjoDimension.AROMA, if (v.promptVariant % 2 == 0) "Un arôme particulier vous ferait plaisir ?" else "Y a-t-il une note aromatique que vous aimeriez retrouver ?", values.map { ref ->
+        MadjoQuestion(MadjoQuestionId.AROMA, MadjoDimension.AROMA, listOf("Un arôme particulier vous ferait plaisir ?", "Y a-t-il une note aromatique que vous aimeriez retrouver ?", "Quelle note aromatique vous attire en ce moment ?", "Vous préférez une famille d’arômes particulière ?")[Math.floorMod(v.promptVariant, 4)], values.map { ref ->
             MadjoAnswerOption("aroma:${ref.id}", ref.label, listOf(criterion(MadjoDimension.AROMA, "aroma", criterionValue(ref), MadjoCriterionKind.PREFERENCE, ref, ref.label)))
         } + anyOption(MadjoDimension.AROMA))
     }
 
     private fun momentQuestion(v: MadjoVocabulary): MadjoQuestion? = v.momentOptions.takeIf { it.isNotEmpty() }?.let { values ->
-        MadjoQuestion(MadjoQuestionId.MOMENT, MadjoDimension.MOMENT, if (v.promptVariant % 2 == 0) "À quel moment aimeriez-vous le déguster ?" else "Vous le boiriez plutôt à quel moment ?", values.map { ref ->
+        MadjoQuestion(MadjoQuestionId.MOMENT, MadjoDimension.MOMENT, listOf("À quel moment aimeriez-vous le déguster ?", "Vous le boiriez plutôt à quel moment ?", "Quand pensez-vous savourer ce thé ?", "Pour quel moment cherchez-vous une tasse ?")[Math.floorMod(v.promptVariant, 4)], values.map { ref ->
             MadjoAnswerOption("moment:${ref.id}", ref.label, listOf(criterion(MadjoDimension.MOMENT, "moment", criterionValue(ref), MadjoCriterionKind.PREFERENCE, ref, ref.label)))
         } + anyOption(MadjoDimension.MOMENT))
     }
@@ -397,7 +407,7 @@ object MadjoConversationEngine {
     private fun originQuestion(v: MadjoVocabulary): MadjoQuestion? {
         val refs = (v.countries + v.regions).distinctBy { it.id }
         if (refs.isEmpty()) return null
-        return MadjoQuestion(MadjoQuestionId.ORIGIN, MadjoDimension.ORIGIN, if (v.promptVariant % 2 == 0) "Une origine vous attire particulièrement ?" else "Un pays ou une région vous tente ?", refs.map { ref ->
+        return MadjoQuestion(MadjoQuestionId.ORIGIN, MadjoDimension.ORIGIN, listOf("Une origine vous attire particulièrement ?", "Un pays ou une région vous tente ?", "Avez-vous une origine en tête ?", "Vous aimeriez un thé d’une région particulière ?")[Math.floorMod(v.promptVariant, 4)], refs.map { ref ->
             val concept = if (ref in v.regions) "region" else "country"
             MadjoAnswerOption("origin:${ref.id}", ref.label, listOf(criterion(MadjoDimension.ORIGIN, concept, criterionValue(ref), MadjoCriterionKind.PREFERENCE, ref, ref.label)))
         } + anyOption(MadjoDimension.ORIGIN))
@@ -410,7 +420,7 @@ object MadjoConversationEngine {
             if (v.highRatedTeaCount > 0) add(MadjoAnswerOption("rating:at_least_8", "Notés 8/10 ou plus", listOf(criterion(MadjoDimension.TASTE_RATING, "taste_rating", "at_least_8", MadjoCriterionKind.PREFERENCE))))
             add(anyOption(MadjoDimension.TASTE_RATING))
         }
-        return MadjoQuestion(MadjoQuestionId.TASTE_RATING, MadjoDimension.TASTE_RATING, "Souhaitez-vous privilégier les thés les mieux notés ?", options)
+        return MadjoQuestion(MadjoQuestionId.TASTE_RATING, MadjoDimension.TASTE_RATING, listOf("Souhaitez-vous privilégier les thés les mieux notés ?", "La note gustative compte-t-elle dans votre choix ?", "Préférez-vous retrouver vos thés les mieux notés ?", "Voulez-vous donner la priorité aux thés que vous appréciez le plus ?")[Math.floorMod(v.promptVariant, 4)], options)
     }
 
     private fun stockQuestion(v: MadjoVocabulary): MadjoQuestion? {
@@ -421,7 +431,7 @@ object MadjoConversationEngine {
             if (v.unknownStockCount > 0) add(stockOption("unknown", "Stock inconnu"))
             add(anyOption(MadjoDimension.STOCK))
         }
-        return MadjoQuestion(MadjoQuestionId.STOCK, MadjoDimension.STOCK, "Le stock est-il important pour vous ?", options)
+        return MadjoQuestion(MadjoQuestionId.STOCK, MadjoDimension.STOCK, listOf("Le stock est-il important pour vous ?", "Souhaitez-vous un thé disponible en ce moment ?", "Faut-il tenir compte du stock ?", "Préférez-vous choisir parmi les thés en stock ?")[Math.floorMod(v.promptVariant, 4)], options)
     }
 
     private fun clarificationQuestion(ambiguity: MadjoAmbiguity, v: MadjoVocabulary): MadjoQuestion {
@@ -442,6 +452,7 @@ object MadjoConversationEngine {
             MadjoDimension.ORIGIN -> (v.countries + v.regions).distinctBy { it.id }.map { ref -> refOption(if (ref in v.regions) "region" else "country", MadjoDimension.ORIGIN, ref) }
             MadjoDimension.TASTE_RATING -> listOf(MadjoAnswerOption("rating:top_rated", "Mes mieux notés", listOf(criterion(MadjoDimension.TASTE_RATING, "taste_rating", "top_rated", MadjoCriterionKind.PREFERENCE))))
             MadjoDimension.STOCK -> listOf(stockOption("available", "Disponibles"), stockOption("out_of_stock", "Épuisés"), stockOption("unknown", "Stock inconnu"))
+            MadjoDimension.TASTING_HISTORY -> emptyList()
             }
         }
         val options = when {
@@ -541,6 +552,15 @@ object MadjoConversationEngine {
             add(MadjoDimension.STOCK, "stock", value, matched = matched)
         }
 
+        val frequencyTerms = listOf("bois souvent", "boit souvent", "bu souvent", "deguste souvent", "degustes souvent", "plus degustes", "plus degustes", "le plus souvent", "frequemment")
+        if (frequencyTerms.any { containsPhrase(normalized, it) }) {
+            add(MadjoDimension.TASTING_HISTORY, "tasting_frequency", "frequent", matched = frequencyTerms.first { containsPhrase(normalized, it) }, kind = MadjoCriterionKind.PREFERENCE)
+        }
+        val forgottenTerms = listOf("pas bu depuis longtemps", "pas deguste depuis longtemps", "pas degustee depuis longtemps", "the oublie", "the oubliee", "the oublies", "retrouver un the oublie", "retrouver mes the oublies", "retrouver un the oublie depuis longtemps")
+        if (!hasWord(normalized, "jamais") && forgottenTerms.any { containsPhrase(normalized, it) }) {
+            add(MadjoDimension.TASTING_HISTORY, "tasting_recency", "oldest_first", matched = forgottenTerms.first { containsPhrase(normalized, it) }, kind = MadjoCriterionKind.PREFERENCE)
+        }
+
         if (listOf("apres un repas", "apres le repas", "apres manger").any { containsPhrase(normalized, it) } &&
             moments.none { (_, term) -> listOf("apres un repas", "apres le repas", "apres manger").any { normalize(it) == normalize(term) } }) {
             ambiguities += MadjoAmbiguity(MadjoDimension.MOMENT, "après un repas", MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE, "moment", nature(MadjoDimension.MOMENT, normalized, "après un repas", source), source)
@@ -571,6 +591,7 @@ object MadjoConversationEngine {
                 }
                 MadjoDimension.TASTE_RATING -> setOf("taste_rating")
                 MadjoDimension.STOCK -> setOf("stock")
+                MadjoDimension.TASTING_HISTORY -> setOf("tasting_frequency", "tasting_recency")
             }
             if (incoming.any { it.dimension == answeredDimension }) merged.removeAll { it.concept in conceptsToReplace }
         }

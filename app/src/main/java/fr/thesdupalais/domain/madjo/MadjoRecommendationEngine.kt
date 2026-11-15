@@ -18,6 +18,8 @@ data class MadjoTeaProfile(
     val moments: List<MadjoReference> = emptyList(),
     val tasteRating: Double? = null,
     val stockMilliGrams: Long? = null,
+    val tastingCount: Int = 0,
+    val lastTastedAtEpochMillis: Long? = null,
 ) {
     val stockState: MadjoStockState get() = when {
         stockMilliGrams == null -> MadjoStockState.UNKNOWN
@@ -37,6 +39,7 @@ data class MadjoRankingWeights(
     val requestedRating: Int = 40,
     val defaultRatingBonus: Int = 5,
     val defaultStockBonus: Int = 4,
+    val tastingHistory: Int = 100_000,
 )
 
 data class MadjoRelaxationOption(val criterion: MadjoCriterion, val matchingTeaCount: Int)
@@ -107,8 +110,9 @@ object MadjoRecommendationEngine {
         val eligible = teas.filter { tea -> activeConstraints.all { matches(tea, it) } }
         if (eligible.isNotEmpty()) {
             val softCriteria = criteria.preferences + acceptedRelaxations
+            val historyScores = historyPreferenceScores(eligible, softCriteria, weights.tastingHistory)
             val ranked = eligible.map { tea ->
-                val score = score(tea, softCriteria, criteria, weights)
+                val score = score(tea, softCriteria, criteria, weights) + historyScores[tea.id].orEmpty().sum()
                 MadjoRankedTea(tea, score, explain(tea, criteria))
             }.sortedWith(compareByDescending<MadjoRankedTea> { it.score }
                 .thenByDescending { it.tea.tasteRating ?: -1.0 }
@@ -124,6 +128,27 @@ object MadjoRecommendationEngine {
         }.distinctBy { criterionKey(it.criterion) }
             .sortedWith(compareBy<MadjoRelaxationOption> { it.matchingTeaCount }.thenBy { it.criterion.dimension.ordinal })
         return MadjoRecommendationOutcome(emptyList(), emptyList(), relaxationOptions, acceptedRelaxations)
+    }
+
+    /** Preference scores rank only teas with actual tasting events; never-tasted teas are not "forgotten". */
+    private fun historyPreferenceScores(
+        teas: List<MadjoTeaProfile>,
+        preferences: List<MadjoCriterion>,
+        maxScore: Int,
+    ): Map<String, List<Int>> = buildMap {
+        preferences.filter { it.dimension == MadjoDimension.TASTING_HISTORY }.forEach { criterion ->
+            val ordered = when (criterion.concept) {
+                "tasting_frequency" -> teas.filter { it.tastingCount > 0 }
+                    .sortedWith(compareByDescending<MadjoTeaProfile> { it.tastingCount }.thenBy { it.id })
+                "tasting_recency" -> teas.filter { it.lastTastedAtEpochMillis != null }
+                    .sortedWith(compareBy<MadjoTeaProfile> { it.lastTastedAtEpochMillis }.thenBy { it.id })
+                else -> emptyList()
+            }
+            ordered.forEachIndexed { index, tea ->
+                val score = maxScore + (ordered.size - index) * 1_000
+                put(tea.id, get(tea.id).orEmpty() + score)
+            }
+        }
     }
 
     fun criterionKey(criterion: MadjoCriterion): String = listOf(
@@ -148,6 +173,7 @@ object MadjoRecommendationEngine {
                     MadjoDimension.ORIGIN -> weights.origin
                     MadjoDimension.TASTE_RATING -> weights.requestedRating
                     MadjoDimension.STOCK -> weights.stockPreference
+                    MadjoDimension.TASTING_HISTORY -> 0
                 }
             }
         }
@@ -180,6 +206,8 @@ object MadjoRecommendationEngine {
                 "unknown" -> tea.stockState == MadjoStockState.UNKNOWN
                 else -> false
             }
+            "tasting_frequency" -> tea.tastingCount > 0
+            "tasting_recency" -> tea.lastTastedAtEpochMillis != null
             else -> false
         }
     }
@@ -219,6 +247,13 @@ object MadjoRecommendationEngine {
             }
         val sentences = mutableListOf<String>()
         if (matched.isNotEmpty()) sentences += "Correspond à ta demande de ${matched.distinct().joinToString(", ")}."
+        criteria.criteria.filter { it.dimension == MadjoDimension.TASTING_HISTORY && matches(tea, it) }.forEach { criterion ->
+            sentences += when (criterion.concept) {
+                "tasting_frequency" -> "Dégusté ${tea.tastingCount} fois dans votre historique."
+                "tasting_recency" -> "Parmi les thés dégustés il y a le plus longtemps."
+                else -> ""
+            }
+        }
         val askedTopRated = criteria.criteria.any { it.concept == "taste_rating" && it.value == "top_rated" }
         if (tea.tasteRating != null && (askedTopRated || criteria.criteria.any { it.dimension == MadjoDimension.TASTE_RATING } || tea.tasteRating >= 8.0)) {
             sentences += if (askedTopRated) "Apprécié à ${formatRating(tea.tasteRating)}/10." else "Noté ${formatRating(tea.tasteRating)}/10."

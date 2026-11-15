@@ -50,6 +50,8 @@ data class CatalogueTea(
     val aromaRefs: List<MadjoReference> = emptyList(),
     val momentRefs: List<MadjoReference> = emptyList(),
     val stockMilliGrams: Long? = null,
+    val tastingCount: Int = 0,
+    val lastTastedAtEpochMillis: Long? = null,
 )
 
 data class CatalogueCriteria(
@@ -120,13 +122,15 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     private val madjoConversation = MutableStateFlow<MadjoConversationState?>(null)
     private data class ResultsRequest(val criteria: MadjoRecommendationCriteria, val acceptedRelaxations: List<MadjoCriterion> = emptyList())
     private val madjoResultsRequest = MutableStateFlow<ResultsRequest?>(null)
+    private var madjoSessionSequence = 0
     val currentCriteria get() = criteria.value
 
     fun setQuery(query: String) { criteria.value = criteria.value.copy(query = query) }
     fun submitQuery(vocabulary: MadjoVocabulary = MadjoVocabulary(), profiles: List<MadjoTeaProfile> = emptyList()) {
         val query = criteria.value.query
         madjoResultsRequest.value = null
-        val initial = query.takeIf(::containsMadjoInvocation)?.let { MadjoConversationEngine.start(it, vocabulary) }
+        val promptVariant = Math.floorMod(query.hashCode() + madjoSessionSequence++, 4)
+        val initial = query.takeIf(::containsMadjoInvocation)?.let { startMadjoSession(it, vocabulary) }
         if (initial == null) {
             madjoConversation.value = null
             return
@@ -134,7 +138,7 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
         val evidence = MadjoRecommendationEngine.questionEvidence(profiles, initial.criteria)
         val prepared = MadjoConversationEngine.updateQuestionEvidence(
             initial,
-            vocabulary.copy(usefulQuestionIds = evidence.first, candidateOptionIds = evidence.second, promptVariant = query.hashCode().and(1)),
+            vocabulary.copy(usefulQuestionIds = evidence.first, candidateOptionIds = evidence.second, promptVariant = promptVariant),
         )
         if (!MadjoConversationEngine.requiresDialogue(prepared)) {
             madjoConversation.value = null
@@ -234,6 +238,9 @@ enum class CatalogueQueryRoute { CLASSIC, MADJO }
 
 internal fun routeCatalogueQuery(query: String): CatalogueQueryRoute =
     if (containsMadjoInvocation(query)) CatalogueQueryRoute.MADJO else CatalogueQueryRoute.CLASSIC
+
+internal fun startMadjoSession(request: String, vocabulary: MadjoVocabulary): MadjoConversationState =
+    MadjoConversationEngine.start(request, vocabulary)
 
 /** Matches a standalone name (or a one-edit typo) after accent and punctuation normalization. */
 internal fun containsMadjoInvocation(query: String): Boolean =
@@ -354,6 +361,8 @@ internal fun TeaWithCatalogData.toCatalogueTea(): CatalogueTea = CatalogueTea(
     aromaRefs = aromas.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
     momentRefs = moments.map { MadjoReference(it.id.toString(), it.semanticKey, it.label, it.parentCountryId?.toString()) },
     stockMilliGrams = tea.stockMilliGrams,
+    tastingCount = tastings.size,
+    lastTastedAtEpochMillis = tastings.maxOfOrNull { it.occurredAtEpochMillis },
 )
 
 internal fun CatalogueTea.toMadjoTeaProfile(): MadjoTeaProfile = MadjoTeaProfile(
@@ -368,6 +377,8 @@ internal fun CatalogueTea.toMadjoTeaProfile(): MadjoTeaProfile = MadjoTeaProfile
     moments = momentRefs,
     tasteRating = tasteRating,
     stockMilliGrams = stockMilliGrams,
+    tastingCount = tastingCount,
+    lastTastedAtEpochMillis = lastTastedAtEpochMillis,
 )
 
 internal fun formatOrigins(countries: List<ReferenceEntity>, regions: List<ReferenceEntity>): List<String> {

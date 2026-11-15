@@ -46,6 +46,19 @@ class CatalogueSearchTest {
         assertEquals(CatalogueQueryRoute.MADJO, routeCatalogueQuery(criteria.query))
     }
 
+    @Test fun newMadjoSessionUsesTheExactNewRequestAndStartsWithFreshCriteria() {
+        val japanRef = fr.thesdupalais.domain.madjo.MadjoReference("japan", "JAPAN", "Japon")
+        val vocabulary = fr.thesdupalais.domain.madjo.MadjoVocabulary(countries = listOf(japanRef))
+        val previous = startMadjoSession("Madjo, un thé vert du Japon", vocabulary)
+        val nextRequest = "  MADJO, un thé noir  "
+        val next = startMadjoSession(nextRequest, vocabulary)
+        assertTrue(previous.criteria.criteria.any { it.concept == "country" })
+        assertEquals(nextRequest, next.initialRequest)
+        assertFalse(next.criteria.criteria.any { it.concept == "country" })
+        assertTrue(next.answers.isEmpty())
+        assertTrue(next.messages.none { it.text.contains("Japon") })
+    }
+
     @Test fun searchIgnoresCaseAccentsAndExtraSpacesAndMatchesWordsAcrossFields() {
         assertTrue(matchesCatalogueTea(collectionTea, CatalogueCriteria(query = "  THE   JAPON   jasmin ")))
         assertTrue(matchesCatalogueTea(collectionTea, CatalogueCriteria(query = "floral uji")))

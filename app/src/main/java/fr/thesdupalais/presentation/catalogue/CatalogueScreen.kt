@@ -388,6 +388,8 @@ private fun criterionLabel(criterion: MadjoCriterion): String = when (criterion.
         else -> "stock inconnu"
     }
     "taste_rating" -> criterion.displayValue ?: "note gustative ${criterion.value}"
+    "tasting_frequency" -> "thés souvent dégustés"
+    "tasting_recency" -> "thés dégustés il y a longtemps"
     else -> criterion.displayValue ?: criterion.value
 }
 
