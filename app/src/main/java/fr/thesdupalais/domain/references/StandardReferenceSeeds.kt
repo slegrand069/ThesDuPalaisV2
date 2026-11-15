@@ -16,6 +16,7 @@ object StandardReferenceSeeds {
         category("WHITE", "Thé blanc", LEGACY_CATEGORY_ID_NAMESPACE),
         category("OOLONG", "Oolong", LEGACY_CATEGORY_ID_NAMESPACE),
         category("PU_ERH", "Pu’Erh", LEGACY_CATEGORY_ID_NAMESPACE),
+        category("DARK", "Thé sombre"),
         category("YELLOW", "Thé jaune", LEGACY_CATEGORY_ID_NAMESPACE),
         category("INFUSION", "Infusion"),
         category("MATE", "Maté"),

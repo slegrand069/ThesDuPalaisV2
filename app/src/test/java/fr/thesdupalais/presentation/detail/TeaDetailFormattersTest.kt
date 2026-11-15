@@ -7,6 +7,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TeaDetailFormattersTest {
+    @Test fun newTastingsStartAtFiveGramsWithoutChangingStoredTastings() {
+        assertEquals(5_000L, DEFAULT_TASTING_AMOUNT_MILLI_GRAMS)
+        assertEquals("5", fr.thesdupalais.domain.quantity.formatGrams(DEFAULT_TASTING_AMOUNT_MILLI_GRAMS))
+    }
+
     @Test fun formatsTastingInstantInFrenchLocalDateAndTime() {
         val instant = ZonedDateTime.of(2026, 11, 1, 14, 30, 0, 0, ZoneId.of("Europe/Paris")).toInstant().toEpochMilli()
 

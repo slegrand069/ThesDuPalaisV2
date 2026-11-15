@@ -63,9 +63,10 @@ data class CatalogueCriteria(
     val containerIds: Set<UUID> = emptySet(),
     val momentIds: Set<UUID> = emptySet(),
     val tasteRating: TasteRatingFilter = TasteRatingFilter.ALL,
+    val stock: StockFilter = StockFilter.ALL,
 ) {
     val hasFilters: Boolean get() = categoryIds.isNotEmpty() || countryIds.isNotEmpty() || statusIds.isNotEmpty() || includeUnspecifiedStatus ||
-        aromaticProfileIds.isNotEmpty() || badgeIds.isNotEmpty() || containerIds.isNotEmpty() || momentIds.isNotEmpty() || tasteRating != TasteRatingFilter.ALL
+        aromaticProfileIds.isNotEmpty() || badgeIds.isNotEmpty() || containerIds.isNotEmpty() || momentIds.isNotEmpty() || tasteRating != TasteRatingFilter.ALL || stock != StockFilter.ALL
     val hasAnyCriteria: Boolean get() = query.isNotBlank() || hasFilters
 }
 
@@ -111,6 +112,8 @@ enum class TasteRatingFilter(val label: String) {
     ALL("Toutes"), EXACTLY_10("10/10"), AT_LEAST_9("9 et +"), AT_LEAST_8("8 et +"),
     AT_LEAST_7("7 et +"), AT_LEAST_6("6 et +"), UNSPECIFIED("Non renseignée"),
 }
+
+enum class StockFilter(val label: String) { ALL("Tous"), UNSPECIFIED("Non renseigné"), EMPTY("Épuisé"), LOW("Faible"), IMPORTANT("Important") }
 
 class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     private val criteria = MutableStateFlow(CatalogueCriteria())
@@ -188,9 +191,10 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
     fun setContainers(ids: Set<UUID>) { criteria.value = criteria.value.copy(containerIds = ids) }
     fun setMoments(ids: Set<UUID>) { criteria.value = criteria.value.copy(momentIds = ids) }
     fun setTasteRating(filter: TasteRatingFilter) { criteria.value = criteria.value.copy(tasteRating = filter) }
+    fun setStock(filter: StockFilter) { criteria.value = criteria.value.copy(stock = filter) }
     fun resetFilters() { criteria.value = criteria.value.copy(
         categoryIds = emptySet(), countryIds = emptySet(), statusIds = emptySet(), includeUnspecifiedStatus = false,
-        aromaticProfileIds = emptySet(), badgeIds = emptySet(), containerIds = emptySet(), momentIds = emptySet(), tasteRating = TasteRatingFilter.ALL,
+        aromaticProfileIds = emptySet(), badgeIds = emptySet(), containerIds = emptySet(), momentIds = emptySet(), tasteRating = TasteRatingFilter.ALL, stock = StockFilter.ALL,
     ) }
     fun resetAll() { criteria.value = CatalogueCriteria(); madjoConversation.value = null; madjoResultsRequest.value = null }
 
@@ -210,8 +214,9 @@ class CatalogueViewModel(teaDao: TeaDao) : ViewModel() {
             )
         }
         val visible = allTeas.filter { tea -> matchesCatalogueTea(tea, current) }
+        val sortedVisible = if (!current.hasFilters) sortCatalogueDefault(visible) else visible
         CatalogueUiState.Content(
-            visible, current, options, noResults = visible.isEmpty(),
+            sortedVisible, current, options, noResults = visible.isEmpty(),
             madjoVocabulary = madjoVocabulary, recommendationProfiles = recommendationProfiles,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), CatalogueUiState.Loading)
@@ -253,11 +258,28 @@ internal fun matchesCatalogueTea(tea: CatalogueTea, criteria: CatalogueCriteria)
         if (!statusMatch) return false
     }
     if (!matchesTasteRating(tea.tasteRating, criteria.tasteRating)) return false
+    if (!matchesStock(tea.stockMilliGrams, criteria.stock)) return false
     val tokens = normalizeCatalogueSearch(criteria.query).split(' ').filter(String::isNotBlank)
     if (tokens.isEmpty()) return true
     val fields = tea.searchableFields.map(::normalizeCatalogueSearch)
     return tokens.all { token -> fields.any { field -> token in field } }
 }
+
+internal fun matchesStock(stockMilliGrams: Long?, filter: StockFilter): Boolean = when (filter) {
+    StockFilter.ALL -> true
+    StockFilter.UNSPECIFIED -> stockMilliGrams == null
+    StockFilter.EMPTY -> stockMilliGrams == 0L
+    StockFilter.LOW -> stockMilliGrams != null && stockMilliGrams > 0L && stockMilliGrams < 50_000L
+    StockFilter.IMPORTANT -> stockMilliGrams != null && stockMilliGrams >= 50_000L
+}
+
+internal fun sortCatalogueDefault(teas: List<CatalogueTea>): List<CatalogueTea> = teas.sortedWith(
+    compareBy<CatalogueTea> { if (it.stockMilliGrams == 0L) 1 else 0 }
+        .thenBy { if (it.tasteRating == null) 1 else 0 }
+        .thenByDescending { it.tasteRating ?: Double.NEGATIVE_INFINITY }
+        .thenBy { it.name.lowercase(Locale.FRENCH) }
+        .thenBy { it.id.toString() },
+)
 
 private fun matchesAny(selected: Set<UUID>, actual: Set<UUID>): Boolean = selected.isEmpty() || selected.any { it in actual }
 

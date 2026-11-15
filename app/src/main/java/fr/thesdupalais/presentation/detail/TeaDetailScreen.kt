@@ -173,14 +173,14 @@ private fun TeaDetailBody(
     val tea = state.tea
     val scope = rememberCoroutineScope()
     var showConsumptionDialog by remember(tea.id) { mutableStateOf(false) }
-    var gramsPerCupInput by remember(tea.id) { mutableStateOf(formatGrams(defaultGramsPerCupMilli)) }
+    var gramsPerCupInput by remember(tea.id) { mutableStateOf(formatGrams(DEFAULT_TASTING_AMOUNT_MILLI_GRAMS)) }
     var cupCountInput by remember(tea.id) { mutableStateOf("1") }
     var consumptionError by remember(tea.id) { mutableStateOf<String?>(null) }
     var recordingTasting by remember(tea.id) { mutableStateOf(false) }
     var showManualTastingDialog by remember(tea.id) { mutableStateOf(false) }
     var manualDateInput by remember(tea.id) { mutableStateOf("") }
     var manualTimeInput by remember(tea.id) { mutableStateOf("") }
-    var manualGramsInput by remember(tea.id) { mutableStateOf("") }
+    var manualGramsInput by remember(tea.id) { mutableStateOf(formatGrams(DEFAULT_TASTING_AMOUNT_MILLI_GRAMS)) }
     var manualCupCountInput by remember(tea.id) { mutableStateOf("1") }
     var manualTastingError by remember(tea.id) { mutableStateOf<String?>(null) }
     var recordingManualTasting by remember(tea.id) { mutableStateOf(false) }
@@ -229,7 +229,7 @@ private fun TeaDetailBody(
             )
             Button(
                 onClick = {
-                    gramsPerCupInput = formatGrams(defaultGramsPerCupMilli)
+                    gramsPerCupInput = formatGrams(DEFAULT_TASTING_AMOUNT_MILLI_GRAMS)
                     cupCountInput = "1"
                     consumptionError = null
                     showConsumptionDialog = true
@@ -323,7 +323,7 @@ private fun TeaDetailBody(
                     val now = System.currentTimeMillis()
                     manualDateInput = formatTastingDateInput(now)
                     manualTimeInput = formatTastingTimeInput(now)
-                    manualGramsInput = formatGrams(defaultGramsPerCupMilli)
+                    manualGramsInput = formatGrams(DEFAULT_TASTING_AMOUNT_MILLI_GRAMS)
                     manualCupCountInput = "1"
                     manualTastingError = null
                     showManualTastingDialog = true

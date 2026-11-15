@@ -12,6 +12,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.ResolverStyle
 import java.util.Locale
 
+internal const val DEFAULT_TASTING_AMOUNT_MILLI_GRAMS = 5_000L
+
 internal fun formatTastingDateTime(
     occurredAtEpochMillis: Long,
     zoneId: ZoneId = ZoneId.systemDefault(),

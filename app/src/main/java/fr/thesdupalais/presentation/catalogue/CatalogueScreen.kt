@@ -94,6 +94,7 @@ fun CatalogueScreen(viewModel: CatalogueViewModel, onTeaSelected: (UUID) -> Unit
         onContainersChange = viewModel::setContainers,
         onMomentsChange = viewModel::setMoments,
         onTasteRatingChange = viewModel::setTasteRating,
+        onStockChange = viewModel::setStock,
         onResetFilters = viewModel::resetFilters,
         onResetAll = viewModel::resetAll,
     )
@@ -121,6 +122,7 @@ internal fun CatalogueContent(
     onContainersChange: (Set<UUID>) -> Unit = {},
     onMomentsChange: (Set<UUID>) -> Unit = {},
     onTasteRatingChange: (TasteRatingFilter) -> Unit = {},
+    onStockChange: (StockFilter) -> Unit = {},
     onResetFilters: () -> Unit = {},
     onResetAll: () -> Unit = {},
 ) {
@@ -196,7 +198,7 @@ internal fun CatalogueContent(
     }
     if (showFilters) CatalogueFilterDialog(
         options, criteria, { showFilters = false }, onCategoriesChange, onCountriesChange, onStatusesChange,
-        onProfilesChange, onBadgesChange, onContainersChange, onMomentsChange, onTasteRatingChange, onResetFilters,
+        onProfilesChange, onBadgesChange, onContainersChange, onMomentsChange, onTasteRatingChange, onStockChange, onResetFilters,
     )
     if (madjoRequest && madjoConversation != null) {
         MadjoDialog(
@@ -462,6 +464,7 @@ private fun CatalogueFilterDialog(options: CatalogueFilterOptions, criteria: Cat
     onContainers: (Set<UUID>) -> Unit,
     onMoments: (Set<UUID>) -> Unit,
     onTasteRating: (TasteRatingFilter) -> Unit,
+    onStock: (StockFilter) -> Unit,
     onReset: () -> Unit,
 ) {
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Filtres du catalogue") }, text = {
@@ -486,6 +489,17 @@ private fun CatalogueFilterDialog(options: CatalogueFilterOptions, criteria: Cat
                     Text(filter.label, modifier = Modifier.weight(1f))
                 }
             }
+            Text("Stock", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+            StockFilter.entries.forEach { filter ->
+                Row(Modifier.fillMaxWidth().height(44.dp).selectable(
+                    selected = criteria.stock == filter,
+                    role = Role.RadioButton,
+                    onClick = { onStock(filter) },
+                ).testTag("catalogue-stock-option-${filter.name}"), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    RadioButton(selected = criteria.stock == filter, onClick = null)
+                    Text(filter.label, modifier = Modifier.weight(1f))
+                }
+            }
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("Terminé") } }, dismissButton = { TextButton(onClick = onReset) { Text("Réinitialiser") } })
 }
@@ -503,6 +517,7 @@ private fun CatalogueCriteria.activeFilterLabels(options: CatalogueFilterOptions
     addSelected("Contenant", options.containers, containerIds)
     addSelected("Moment", options.moments, momentIds)
     if (tasteRating != TasteRatingFilter.ALL) add("Note : ${tasteRating.label}")
+    if (stock != StockFilter.ALL) add("Stock : ${stock.label}")
 }
 
 @Composable

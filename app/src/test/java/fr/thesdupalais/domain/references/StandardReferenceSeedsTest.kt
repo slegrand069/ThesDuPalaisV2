@@ -12,11 +12,13 @@ class StandardReferenceSeedsTest {
         val byKey = categories.associateBy { it.semanticKey }
 
         assertEquals(
-            setOf("GREEN", "BLACK", "WHITE", "YELLOW", "OOLONG", "PU_ERH", "INFUSION", "MATE", "OTHER"),
+            setOf("GREEN", "BLACK", "WHITE", "YELLOW", "OOLONG", "PU_ERH", "DARK", "INFUSION", "MATE", "OTHER"),
             byKey.keys,
         )
         assertEquals("Thé jaune", byKey.getValue("YELLOW").label)
         assertEquals("Pu’Erh", byKey.getValue("PU_ERH").label)
+        assertEquals("Thé sombre", byKey.getValue("DARK").label)
+        assertNotEquals(byKey.getValue("PU_ERH").id, byKey.getValue("DARK").id)
         assertEquals(byKey.getValue("PU_ERH").id, categories.single { it.semanticKey == "PU_ERH" }.id)
         assertNotEquals(byKey.getValue("PU_ERH").id, byKey.getValue("BLACK").id)
         assertTrue(categories.all { it.id.toString() == it.id.toString().lowercase() })

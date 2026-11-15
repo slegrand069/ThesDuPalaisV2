@@ -94,4 +94,37 @@ class CatalogueSearchTest {
         assertFalse(matchesTasteRating(0.0, TasteRatingFilter.UNSPECIFIED))
         assertTrue(matchesTasteRating(null, TasteRatingFilter.ALL))
     }
+
+    @Test fun stockFiltersKeepUnknownDistinctAndRespectTheFiftyGramBoundary() {
+        assertTrue(matchesStock(null, StockFilter.UNSPECIFIED))
+        assertFalse(matchesStock(0L, StockFilter.UNSPECIFIED))
+        assertTrue(matchesStock(0L, StockFilter.EMPTY))
+        assertFalse(matchesStock(1L, StockFilter.EMPTY))
+        assertTrue(matchesStock(49_999L, StockFilter.LOW))
+        assertFalse(matchesStock(50_000L, StockFilter.LOW))
+        assertTrue(matchesStock(50_000L, StockFilter.IMPORTANT))
+        assertFalse(matchesStock(null, StockFilter.IMPORTANT))
+        assertTrue(matchesCatalogueTea(collectionTea.copy(stockMilliGrams = 0L), CatalogueCriteria(stock = StockFilter.EMPTY)))
+        assertFalse(matchesCatalogueTea(collectionTea.copy(stockMilliGrams = null), CatalogueCriteria(stock = StockFilter.EMPTY)))
+    }
+
+    @Test fun defaultSortSeparatesEmptyStockThenRanksKnownRatingsAndUsesStableTies() {
+        fun tea(name: String, stock: Long?, rating: Double?, id: String) = collectionTea.copy(
+            id = UUID.fromString("00000000-0000-4000-8000-${id.padStart(12, '0')}"), name = name,
+            stockMilliGrams = stock, tasteRating = rating,
+        )
+        val teas = listOf(
+            tea("Vide sans note", 0L, null, "5"), tea("Sans stock note", null, 8.0, "4"),
+            tea("Disponible B", 1L, 8.0, "3"), tea("Disponible A", 50_000L, 8.0, "2"),
+            tea("Disponible sans note", 0L, 8.0, "1"),
+        )
+        assertEquals(listOf("Disponible A", "Disponible B", "Sans stock note", "Disponible sans note", "Vide sans note"), sortCatalogueDefault(teas).map { it.name })
+        assertEquals(sortCatalogueDefault(teas), sortCatalogueDefault(teas))
+    }
+
+    @Test fun defaultSortUsesIdentifierWhenNamesAndRatingsAreIdentical() {
+        val first = collectionTea.copy(id = UUID.fromString("00000000-0000-4000-8000-000000000001"), name = "Même nom", tasteRating = 9.0, stockMilliGrams = null)
+        val second = collectionTea.copy(id = UUID.fromString("00000000-0000-4000-8000-000000000002"), name = "Même nom", tasteRating = 9.0, stockMilliGrams = 10_000L)
+        assertEquals(listOf(first.id, second.id), sortCatalogueDefault(listOf(second, first)).map { it.id })
+    }
 }
