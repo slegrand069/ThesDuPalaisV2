@@ -17,7 +17,7 @@ enum class MadjoQuestionId { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, ST
 enum class MadjoCriterionKind { ABSOLUTE_CONSTRAINT, PREFERENCE }
 enum class MadjoCriterionSource { INITIAL_REQUEST, USER_ANSWER }
 enum class MadjoRelation { DIRECT_SYNONYM, SPECIALIZATION, SEMANTIC_ASSOCIATION }
-enum class MadjoAmbiguityReason { UNKNOWN_REFERENCE_VALUE, CONFLICTING_VALUES, AMBIGUOUS_SEMANTIC_CONCEPT }
+enum class MadjoAmbiguityReason { UNKNOWN_REFERENCE_VALUE, CONFLICTING_VALUES, AMBIGUOUS_SEMANTIC_CONCEPT, SOFT_ASSOCIATION_NOT_CONSTRAINT }
 
 data class MadjoReference(
     val id: String,
@@ -55,6 +55,8 @@ data class MadjoSemanticAlternative(
     val businessDimension: String? = null,
     val businessConcept: String? = null,
     val businessValue: String? = null,
+    val associationId: String? = null,
+    val associationWeightPercent: Int? = null,
 )
 
 data class MadjoCriterion(
@@ -68,6 +70,8 @@ data class MadjoCriterion(
     val matchedText: String? = null,
     val relation: MadjoRelation = MadjoRelation.DIRECT_SYNONYM,
     val semanticExpansions: List<MadjoSemanticAlternative> = emptyList(),
+    val softAssociations: List<MadjoSemanticAlternative> = emptyList(),
+    val softAssociationSourceId: String? = null,
 )
 
 data class MadjoAmbiguity(
@@ -80,6 +84,17 @@ data class MadjoAmbiguity(
     val candidateReferenceIds: List<String> = emptyList(),
     val candidateValues: List<String> = emptyList(),
     val semanticCandidates: List<MadjoSemanticAlternative> = emptyList(),
+)
+
+data class MadjoSoftAssociationTrace(
+    val associationId: String,
+    val sourceConceptId: String,
+    val sourceConceptLabel: String,
+    val targetConceptId: String,
+    val targetConceptLabel: String,
+    val weightPercent: Int,
+    val actualCharacteristic: String,
+    val contribution: Int,
 )
 
 /** Flat, traceable contract for M3.2. Criteria on each dimension can be combined. */
@@ -491,7 +506,7 @@ object MadjoConversationEngine {
             }
         }
         val options = when {
-            ambiguity.reason == MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE -> emptyList()
+            ambiguity.reason == MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE || ambiguity.reason == MadjoAmbiguityReason.SOFT_ASSOCIATION_NOT_CONSTRAINT -> emptyList()
             ambiguity.reason == MadjoAmbiguityReason.AMBIGUOUS_SEMANTIC_CONCEPT -> candidates
             ambiguity.detail == "category" -> candidates.filter { option -> option.value.substringAfter(':') in ambiguity.candidateReferenceIds }
             ambiguity.detail == "beverage_type" -> candidates
@@ -502,6 +517,7 @@ object MadjoConversationEngine {
             MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE -> "Je ne trouve pas « ${ambiguity.phrase} » dans le référentiel de la collection. Pouvez-vous préciser ou reformuler ce critère ?"
             MadjoAmbiguityReason.CONFLICTING_VALUES -> "J’ai compris plusieurs choix incompatibles pour ${ambiguity.phrase}. Lequel voulez-vous garder ?"
             MadjoAmbiguityReason.AMBIGUOUS_SEMANTIC_CONCEPT -> "« ${ambiguity.phrase} » peut désigner plusieurs concepts. Lequel voulez-vous dire ?"
+            MadjoAmbiguityReason.SOFT_ASSOCIATION_NOT_CONSTRAINT -> "L’association vers « ${ambiguity.phrase} » peut seulement aider à privilégier des thés ; elle ne peut pas appliquer votre demande comme filtre strict. Reformulez sans contrainte exclusive pour l’utiliser comme préférence."
         }
         return MadjoQuestion(MadjoQuestionId.CLARIFICATION, ambiguity.dimension, label, options)
     }
@@ -618,10 +634,10 @@ object MadjoConversationEngine {
             )
         }
         val replacedDimensions = semanticAmbiguities.map { it.dimension }.toSet()
-        val semanticCriteria = semanticCriteria(semanticResolution.matches, vocabulary, normalized, source)
+        val (semanticCriteria, associationAmbiguities) = semanticCriteria(semanticResolution.matches, vocabulary, normalized, source)
         val finalCriteria = mergeDistinct(output.filterNot { it.dimension in replacedDimensions } + semanticCriteria)
         val finalAmbiguities = mergeAmbiguities(
-            ambiguities.filterNot { it.dimension in replacedDimensions },
+            ambiguities.filterNot { it.dimension in replacedDimensions } + associationAmbiguities,
             semanticAmbiguities,
         )
         return Extraction(finalCriteria, finalAmbiguities, finalCriteria.map { it.concept }.toSet())
@@ -632,28 +648,70 @@ object MadjoConversationEngine {
         vocabulary: MadjoVocabulary,
         normalizedRequest: String,
         source: MadjoCriterionSource,
-    ): List<MadjoCriterion> {
+    ): Pair<List<MadjoCriterion>, List<MadjoAmbiguity>> {
         val roots = matches.filter { it.relationType == null }
-        return roots.mapNotNull { root ->
+        val associationAmbiguities = mutableListOf<MadjoAmbiguity>()
+        val criteria = roots.mapNotNull { root ->
             val group = matches.filter { it.normalizedExpression == root.normalizedExpression && it.matchedExpression == root.matchedExpression &&
                 (it.concept.id == root.concept.id || it.relationType == SemanticRelationType.SPECIALIZATION) }
             val mapped = group.firstOrNull { it.concept.businessDimension != null && it.concept.businessConcept != null && it.concept.businessValue != null }
-                ?: return@mapNotNull null
+            val softAlternatives = vocabulary.semanticDictionary.associations.asSequence()
+                .filter { it.active && it.sourceConceptId == root.concept.id }
+                .mapNotNull { association ->
+                    val target = vocabulary.semanticDictionary.concepts.firstOrNull { it.id == association.targetConceptId && it.active }
+                        ?: return@mapNotNull null
+                    semanticAlternative(target, target.domain, vocabulary)?.copy(
+                        relation = MadjoRelation.SEMANTIC_ASSOCIATION,
+                        associationId = association.id,
+                        associationWeightPercent = association.weightPercent,
+                    )
+                }.distinctBy(MadjoSemanticAlternative::associationId).toList()
+            if (mapped == null) {
+                if (softAlternatives.isEmpty()) return@mapNotNull null
+                val targetConcept = vocabulary.semanticDictionary.concepts.firstOrNull { it.id == softAlternatives.first().conceptId }
+                    ?: return@mapNotNull null
+                val dimension = semanticDimension(targetConcept.domain, targetConcept) ?: return@mapNotNull null
+                if (hasExplicitConstraint(normalizedRequest)) {
+                    associationAmbiguities += MadjoAmbiguity(
+                        dimension = dimension,
+                        phrase = softAlternatives.first().label,
+                        reason = MadjoAmbiguityReason.SOFT_ASSOCIATION_NOT_CONSTRAINT,
+                        detail = "soft-association-is-preference",
+                        source = source,
+                    )
+                    return@mapNotNull null
+                }
+                return@mapNotNull MadjoCriterion(
+                    dimension = dimension,
+                    concept = targetConcept.businessConcept ?: "soft_association",
+                    value = "soft:${root.concept.id}",
+                    kind = MadjoCriterionKind.PREFERENCE,
+                    source = source,
+                    displayValue = root.concept.label,
+                    matchedText = root.matchedExpression,
+                    softAssociations = softAlternatives,
+                    softAssociationSourceId = root.concept.id,
+                )
+            }
             val dimension = semanticDimension(root.concept.domain, mapped.concept) ?: return@mapNotNull null
             val alternatives = group.mapNotNull { semanticAlternative(it.concept, root.concept.domain, vocabulary, it.relationType) }
             if (alternatives.isEmpty()) return@mapNotNull null
             val value = root.concept.businessValue ?: mapped.concept.businessValue ?: root.concept.id
+            val kind = nature(dimension, normalizedRequest, root.matchedExpression, source)
             MadjoCriterion(
                 dimension = dimension,
                 concept = mapped.concept.businessConcept ?: root.concept.businessConcept.orEmpty(),
                 value = value,
-                kind = nature(dimension, normalizedRequest, root.matchedExpression, source),
+                kind = kind,
                 source = source,
                 displayValue = root.concept.label,
                 matchedText = root.matchedExpression,
                 semanticExpansions = alternatives,
+                softAssociations = if (kind == MadjoCriterionKind.PREFERENCE) softAlternatives else emptyList(),
+                softAssociationSourceId = root.concept.id.takeIf { kind == MadjoCriterionKind.PREFERENCE && softAlternatives.isNotEmpty() },
             )
         }.distinctBy { listOf(it.dimension.name, it.concept, it.value, it.kind.name, it.matchedText.orEmpty()) }
+        return criteria to associationAmbiguities
     }
 
     private fun semanticAlternative(
@@ -864,10 +922,13 @@ object MadjoConversationEngine {
     }
 
     private fun mergeDistinct(items: List<MadjoCriterion>): List<MadjoCriterion> = items
-        .groupBy { listOf(it.dimension.name, it.concept, it.referenceId ?: it.value, it.kind.name) }
+        .groupBy { listOf(it.dimension.name, it.concept, it.referenceId ?: it.value, it.kind.name, it.softAssociationSourceId.orEmpty()) }
         .values.map { same ->
             val first = same.first()
-            first.copy(semanticExpansions = same.flatMap(MadjoCriterion::semanticExpansions).distinctBy(MadjoSemanticAlternative::conceptId))
+            first.copy(
+                semanticExpansions = same.flatMap(MadjoCriterion::semanticExpansions).distinctBy(MadjoSemanticAlternative::conceptId),
+                softAssociations = same.flatMap(MadjoCriterion::softAssociations).distinctBy(MadjoSemanticAlternative::associationId),
+            )
         }
 
     private fun mergeAmbiguities(existing: List<MadjoAmbiguity>, incoming: List<MadjoAmbiguity>): List<MadjoAmbiguity> =

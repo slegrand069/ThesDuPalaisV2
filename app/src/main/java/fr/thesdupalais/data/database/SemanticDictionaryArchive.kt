@@ -5,6 +5,7 @@ import fr.thesdupalais.domain.semantics.SemanticDomain
 import fr.thesdupalais.domain.semantics.SemanticConcept
 import fr.thesdupalais.domain.semantics.SemanticDictionaryValidator
 import fr.thesdupalais.domain.semantics.BuiltInSemanticConceptIds
+import fr.thesdupalais.domain.semantics.SemanticAssociation
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -13,16 +14,19 @@ data class SemanticDictionaryArchive(
     val concepts: List<SemanticConceptEntity>,
     val expressions: List<SemanticExpressionEntity>,
     val relations: List<SemanticRelationEntity>,
+    val associations: List<SemanticAssociationEntity> = emptyList(),
 ) {
     val synonymCount: Int get() = expressions.count { !it.isPrimary && it.expression.isNotBlank() }
     val inactiveConceptCount: Int get() = concepts.count { !it.active && !it.deleted }
     val tombstoneCount: Int get() = concepts.count { it.deleted }
     val relationCount: Int get() = relations.size
+    val associationCount: Int get() = associations.size
 }
 
 object SemanticDictionaryArchiveJson {
     const val FORMAT = "thes-du-palais-madjo-dictionary"
-    const val VERSION = 1
+    const val VERSION = 2
+    const val LEGACY_VERSION = 1
 
     fun encode(archive: SemanticDictionaryArchive): String {
         val concepts = archive.concepts.sortedBy(SemanticConceptEntity::id).joinToString(",\n") { row ->
@@ -34,13 +38,17 @@ object SemanticDictionaryArchiveJson {
         val relations = archive.relations.sortedWith(compareBy<SemanticRelationEntity> { it.sourceConceptId }.thenBy { it.targetConceptId }.thenBy { it.type }.thenBy { it.id }).joinToString(",\n") { row ->
             "    {\"id\":${quote(row.id)},\"sourceConceptId\":${quote(row.sourceConceptId)},\"targetConceptId\":${quote(row.targetConceptId)},\"type\":${quote(row.type)},\"active\":${row.active}}"
         }
+        val associations = archive.associations.sortedWith(compareBy<SemanticAssociationEntity> { it.sourceConceptId }.thenBy { it.targetConceptId }.thenBy { it.id }).joinToString(",\n") { row ->
+            "    {\"id\":${quote(row.id)},\"sourceConceptId\":${quote(row.sourceConceptId)},\"targetConceptId\":${quote(row.targetConceptId)},\"weightPercent\":${row.weightPercent},\"active\":${row.active}}"
+        }
         return """
             {
               "format": ${quote(FORMAT)},
               "version": $VERSION,
               "concepts": [${if (concepts.isEmpty()) "" else "\n$concepts\n  "}],
               "expressions": [${if (expressions.isEmpty()) "" else "\n$expressions\n  "}],
-              "relations": [${if (relations.isEmpty()) "" else "\n$relations\n  "}]
+              "relations": [${if (relations.isEmpty()) "" else "\n$relations\n  "}],
+              "associations": [${if (associations.isEmpty()) "" else "\n$associations\n  "}]
             }
         """.trimIndent() + "\n"
     }
@@ -49,8 +57,10 @@ object SemanticDictionaryArchiveJson {
         val root = JSONObject(json)
         require(root.optString("format") == FORMAT) { "Ce fichier n’est pas une sauvegarde de dictionnaire Madjo reconnue." }
         val version = root.optInt("version", -1)
-        require(version == VERSION) { "Version de dictionnaire non prise en charge : $version." }
+        require(version == VERSION || version == LEGACY_VERSION) { "Version de dictionnaire non prise en charge : $version." }
         require(root.has("concepts") && root.has("expressions") && root.has("relations")) { "Le fichier est incomplet." }
+        require(version != LEGACY_VERSION || !root.has("associations")) { "Un fichier v1 ne peut pas contenir de relations souples." }
+        require(version != VERSION || root.has("associations")) { "Le fichier v2 est incomplet : associations manquantes." }
         val archive = SemanticDictionaryArchive(
             concepts = root.getJSONArray("concepts").toRows { row -> SemanticConceptEntity(
                 id = row.getString("id"), domain = row.getString("domain"), label = row.getString("label"),
@@ -66,6 +76,10 @@ object SemanticDictionaryArchiveJson {
                 id = row.getString("id"), sourceConceptId = row.getString("sourceConceptId"), targetConceptId = row.getString("targetConceptId"),
                 type = row.getString("type"), active = row.getBoolean("active"),
             ) },
+            associations = if (version == LEGACY_VERSION) emptyList() else root.getJSONArray("associations").toRows { row -> SemanticAssociationEntity(
+                id = row.getString("id"), sourceConceptId = row.getString("sourceConceptId"), targetConceptId = row.getString("targetConceptId"),
+                weightPercent = row.getInt("weightPercent"), active = row.getBoolean("active"),
+            ) },
         )
         validateStructure(archive)
         return archive
@@ -76,6 +90,7 @@ object SemanticDictionaryArchiveJson {
         uniqueIds(archive.concepts.map { it.id }, "de concepts")
         uniqueIds(archive.expressions.map { it.id }, "d’expressions")
         uniqueIds(archive.relations.map { it.id }, "de relations")
+        uniqueIds(archive.associations.map { it.id }, "d’associations")
         val concepts = archive.concepts.associateBy { it.id }
         archive.concepts.forEach { row ->
             require(runCatching { SemanticDomain.valueOf(row.domain) }.isSuccess) { "Domaine inconnu pour « ${row.label} »." }
@@ -114,6 +129,22 @@ object SemanticDictionaryArchiveJson {
                 (source.businessConcept == null || target.businessConcept == null || source.businessConcept == target.businessConcept)) {
                 "Relation incohérente entre « ${source.label} » et « ${target.label} »."
             }
+        }
+        val associationPairs = mutableSetOf<Pair<String, String>>()
+        archive.associations.forEach { association ->
+            require(association.sourceConceptId in concepts && association.targetConceptId in concepts) { "Une association pointe vers un concept absent." }
+            val pair = association.sourceConceptId to association.targetConceptId
+            require(pair !in associationPairs) { "Une association directionnelle est dupliquée." }
+            associationPairs += pair
+            require(association.weightPercent in setOf(25, 50, 75)) { "Poids d’association invalide : ${association.weightPercent}." }
+            val source = concepts.getValue(association.sourceConceptId)
+            val target = concepts.getValue(association.targetConceptId)
+            SemanticDictionaryValidator.validateAssociation(
+                SemanticConcept(source.id, SemanticDomain.valueOf(source.domain), source.label, true, source.businessDimension, source.businessConcept, source.businessValue),
+                SemanticConcept(target.id, SemanticDomain.valueOf(target.domain), target.label, true, target.businessDimension, target.businessConcept, target.businessValue),
+                association.weightPercent,
+                emptyList(),
+            )
         }
         val activeEdges = archive.relations.filter(SemanticRelationEntity::active).groupBy(SemanticRelationEntity::sourceConceptId, SemanticRelationEntity::targetConceptId)
         val pairs = archive.relations.map { Triple(it.sourceConceptId, it.targetConceptId, it.type) }

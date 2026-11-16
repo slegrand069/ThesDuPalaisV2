@@ -5,6 +5,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import fr.thesdupalais.domain.semantics.SemanticAssociation
+import fr.thesdupalais.domain.semantics.SemanticConcept
+import fr.thesdupalais.domain.semantics.SemanticDictionarySnapshot
+import fr.thesdupalais.domain.semantics.SemanticDomain
+import fr.thesdupalais.domain.semantics.SemanticExpression
 
 class MadjoConversationEngineTest {
     private val categoryGreen = MadjoReference("cat-green", "GREEN", "Thé vert")
@@ -69,6 +74,37 @@ class MadjoConversationEngineTest {
         assertTrue(state.recommendationReady)
         assertTrue(state.questionsAsked.isEmpty())
         assertTrue(state.criteria.ambiguities.isEmpty())
+    }
+
+    @Test fun aNewConversationUsesCurrentActiveSoftAssociationsWithoutRecursiveExpansion() {
+        val source = SemanticConcept("gourmand", SemanticDomain.AROMA, "Gourmand")
+        val vanilla = SemanticConcept("vanilla", SemanticDomain.AROMA, "Vanillé", businessDimension = "AROMA", businessConcept = "aroma", businessValue = "VANILLA")
+        val expressions = listOf(
+            SemanticExpression("gourmand-expression", source.id, "Gourmand", "gourmand", true),
+            SemanticExpression("vanilla-expression", vanilla.id, "Vanillé", "vanille", true),
+        )
+        val association = SemanticAssociation("gourmand-vanilla", source.id, vanilla.id, 75)
+        val current = vocabulary.copy(
+            aromas = vocabulary.aromas + MadjoReference("vanilla-ref", "VANILLA", "Vanillé"),
+            semanticDictionary = SemanticDictionarySnapshot(
+            concepts = listOf(source, vanilla), expressions = expressions, associations = listOf(association),
+        ))
+        val first = MadjoConversationEngine.start("Madjo, je voudrais un thé gourmand", current)
+        val soft = first.criteria.preferences.single()
+        assertEquals("gourmand", soft.softAssociationSourceId)
+        assertEquals("gourmand-vanilla", soft.softAssociations.single().associationId)
+        assertEquals(MadjoRelation.SEMANTIC_ASSOCIATION, soft.softAssociations.single().relation)
+
+        val changedSnapshot = current.copy(semanticDictionary = current.semanticDictionary.copy(associations = emptyList()))
+        val next = MadjoConversationEngine.start("Madjo, je voudrais un thé gourmand", changedSnapshot)
+        assertTrue(next.criteria.criteria.none { it.softAssociations.isNotEmpty() })
+
+        val inactiveTarget = vanilla.copy(active = false)
+        val inactiveSnapshot = current.copy(semanticDictionary = current.semanticDictionary.copy(
+            concepts = listOf(source, inactiveTarget),
+        ))
+        val inactive = MadjoConversationEngine.start("Madjo, je voudrais un thé gourmand", inactiveSnapshot)
+        assertTrue(inactive.criteria.criteria.none { it.softAssociations.isNotEmpty() })
     }
 
     @Test fun explicitHedgesMakeSoftPreferencesWhilePlainCharacteristicsAreConstraints() {

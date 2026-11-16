@@ -18,6 +18,9 @@ interface SemanticDictionaryDao {
     @Query("SELECT * FROM semantic_relations ORDER BY sourceConceptId, targetConceptId, id")
     fun observeRelations(): Flow<List<SemanticRelationEntity>>
 
+    @Query("SELECT * FROM semantic_associations ORDER BY sourceConceptId, targetConceptId, id")
+    fun observeAssociations(): Flow<List<SemanticAssociationEntity>>
+
     @Query("SELECT * FROM semantic_concepts WHERE deleted = 0")
     suspend fun allConcepts(): List<SemanticConceptEntity>
 
@@ -30,8 +33,23 @@ interface SemanticDictionaryDao {
     @Query("SELECT * FROM semantic_relations")
     suspend fun allRelations(): List<SemanticRelationEntity>
 
+    @Query("SELECT * FROM semantic_associations ORDER BY sourceConceptId, targetConceptId, id")
+    suspend fun allAssociations(): List<SemanticAssociationEntity>
+
+    @Query("SELECT * FROM semantic_associations WHERE sourceConceptId = :conceptId OR targetConceptId = :conceptId ORDER BY sourceConceptId, targetConceptId")
+    suspend fun associationsForConcept(conceptId: String): List<SemanticAssociationEntity>
+
+    @Query("SELECT * FROM semantic_associations WHERE id = :id LIMIT 1")
+    suspend fun findAssociation(id: String): SemanticAssociationEntity?
+
+    @Query("SELECT * FROM semantic_associations WHERE sourceConceptId = :sourceId AND targetConceptId = :targetId LIMIT 1")
+    suspend fun findAssociation(sourceId: String, targetId: String): SemanticAssociationEntity?
+
     @Query("DELETE FROM semantic_relations")
     suspend fun clearRelationsForReplacement()
+
+    @Query("DELETE FROM semantic_associations")
+    suspend fun clearAssociationsForReplacement()
 
     @Query("DELETE FROM semantic_expressions")
     suspend fun clearExpressionsForReplacement()
@@ -82,6 +100,9 @@ interface SemanticDictionaryDao {
     suspend fun insertRelations(values: List<SemanticRelationEntity>)
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertAssociations(values: List<SemanticAssociationEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertConcept(value: SemanticConceptEntity)
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
@@ -101,6 +122,18 @@ interface SemanticDictionaryDao {
 
     @Query("UPDATE semantic_relations SET active = 0 WHERE id = :id")
     suspend fun deactivateRelation(id: String): Int
+
+    @Query("DELETE FROM semantic_associations WHERE id = :id")
+    suspend fun deleteAssociation(id: String): Int
+
+    @Query("UPDATE semantic_associations SET active = :active WHERE id = :id")
+    suspend fun updateAssociationActive(id: String, active: Boolean): Int
+
+    @Update
+    suspend fun updateAssociation(value: SemanticAssociationEntity)
+
+    @Query("DELETE FROM semantic_associations WHERE sourceConceptId = :conceptId OR targetConceptId = :conceptId")
+    suspend fun deleteAssociationsForConcept(conceptId: String)
 
     @Query("DELETE FROM semantic_relations WHERE sourceConceptId = :conceptId OR targetConceptId = :conceptId")
     suspend fun deleteRelationsForConcept(conceptId: String)

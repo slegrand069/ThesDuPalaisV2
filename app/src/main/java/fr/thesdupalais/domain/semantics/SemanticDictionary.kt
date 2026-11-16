@@ -6,6 +6,14 @@ import java.util.Locale
 enum class SemanticDomain { AROMA, AROMATIC_PROFILE, CATEGORY, ORIGIN, MOMENT, TASTE_RATING, STOCK, TASTING_HISTORY }
 enum class SemanticMatchType { PRIMARY_LABEL, SYNONYM }
 enum class SemanticRelationType { SPECIALIZATION }
+enum class SemanticAssociationStrength(val weightPercent: Int, val label: String) {
+    LOW(25, "Faible"), MEDIUM(50, "Moyenne"), HIGH(75, "Forte");
+
+    companion object {
+        fun fromWeight(weightPercent: Int): SemanticAssociationStrength = entries.firstOrNull { it.weightPercent == weightPercent }
+            ?: throw IllegalArgumentException("Le poids doit être Faible (25 %), Moyen (50 %) ou Fort (75 %).")
+    }
+}
 
 data class SemanticConcept(
     val id: String,
@@ -34,10 +42,19 @@ data class SemanticRelation(
     val active: Boolean = true,
 )
 
+data class SemanticAssociation(
+    val id: String,
+    val sourceConceptId: String,
+    val targetConceptId: String,
+    val weightPercent: Int = SemanticAssociationStrength.MEDIUM.weightPercent,
+    val active: Boolean = true,
+)
+
 data class SemanticDictionarySnapshot(
     val concepts: List<SemanticConcept> = emptyList(),
     val expressions: List<SemanticExpression> = emptyList(),
     val relations: List<SemanticRelation> = emptyList(),
+    val associations: List<SemanticAssociation> = emptyList(),
 )
 
 data class SemanticMatch(
@@ -171,6 +188,29 @@ object SemanticDictionaryValidator {
         SemanticDomain.ORIGIN -> referenceKind == "COUNTRY" || referenceKind == "REGION"
         SemanticDomain.MOMENT -> referenceKind == "MOMENT"
         SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY -> false
+    }
+
+    fun validateAssociation(source: SemanticConcept, target: SemanticConcept, weightPercent: Int, existing: List<SemanticAssociation>, editingId: String? = null) {
+        require(source.id != target.id) { "Un concept ne peut pas être associé à lui-même." }
+        require(source.active && target.active) { "Les deux concepts doivent être actifs." }
+        require(target.businessDimension != null && target.businessConcept != null && target.businessValue != null) {
+            "Le concept associé doit désigner une caractéristique réelle de ThésDuPalais."
+        }
+        require(associationDimension(source.domain) != null && associationDimension(source.domain) == associationDimension(target.domain)) {
+            "Ces domaines ne sont pas compatibles pour une association souple."
+        }
+        SemanticAssociationStrength.fromWeight(weightPercent)
+        require(existing.none { it.id != editingId && it.sourceConceptId == source.id && it.targetConceptId == target.id }) {
+            "Cette association existe déjà dans cette direction."
+        }
+    }
+
+    fun associationDimension(domain: SemanticDomain): String? = when (domain) {
+        SemanticDomain.AROMA, SemanticDomain.AROMATIC_PROFILE -> "AROMA"
+        SemanticDomain.CATEGORY -> "TYPE_COLOR"
+        SemanticDomain.ORIGIN -> "ORIGIN"
+        SemanticDomain.MOMENT -> "MOMENT"
+        SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY -> null
     }
 
     fun normalizedExpressions(label: String, synonyms: List<String>): List<String> {

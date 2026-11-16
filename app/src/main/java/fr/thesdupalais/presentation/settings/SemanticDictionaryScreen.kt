@@ -51,6 +51,8 @@ import fr.thesdupalais.domain.semantics.SemanticDomain
 import fr.thesdupalais.domain.semantics.SemanticExpression
 import fr.thesdupalais.domain.semantics.SemanticRelation
 import fr.thesdupalais.domain.semantics.SemanticRelationType
+import fr.thesdupalais.domain.semantics.SemanticAssociation
+import fr.thesdupalais.domain.semantics.SemanticAssociationStrength
 import fr.thesdupalais.domain.semantics.SemanticDictionaryValidator
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +187,7 @@ fun SemanticDictionaryScreen(
             text = { Column {
                 Text("Le fichier contient : ${preview.concepts.size} concepts, ${preview.synonymCount} synonymes, ${preview.relationCount} relations.")
                 Text("Concepts inactifs : ${preview.inactiveConceptCount} · suppressions logiques : ${preview.tombstoneCount}")
+                Text("Associations souples : ${preview.associationCount}")
                 Spacer(Modifier.height(8.dp))
                 Text("Le dictionnaire Madjo actuel sera remplacé intégralement. Les fiches de thé, dégustations, stocks, articles et références métier ne seront pas modifiés.")
             } },
@@ -236,6 +239,13 @@ fun SemanticConceptEditorScreen(
     var domainMenu by remember { mutableStateOf(false) }
     var relationMenu by remember { mutableStateOf(false) }
     var relationToDelete by remember { mutableStateOf<SemanticRelation?>(null) }
+    var associationDialogOpen by remember { mutableStateOf(false) }
+    var associationToEdit by remember { mutableStateOf<SemanticAssociation?>(null) }
+    var associationToDelete by remember { mutableStateOf<SemanticAssociation?>(null) }
+    var selectedAssociationTargetId by remember(localId) { mutableStateOf<String?>(null) }
+    var selectedAssociationWeight by remember(localId) { mutableStateOf(SemanticAssociationStrength.MEDIUM.weightPercent) }
+    var associationTargetMenu by remember { mutableStateOf(false) }
+    var associationWeightMenu by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var localError by remember(localId) { mutableStateOf<String?>(null) }
@@ -372,6 +382,52 @@ fun SemanticConceptEditorScreen(
             }
         }
 
+        if (!isNew && concept != null) {
+            Spacer(Modifier.height(16.dp))
+            Text("Associations souples", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Elles ajoutent une préférence au classement, sans remplacer un filtre strict.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val associations = state.snapshot.associations.filter { it.sourceConceptId == concept.id }
+                .sortedWith(frenchLabelComparator(
+                    { association -> state.snapshot.concepts.firstOrNull { it.id == association.targetConceptId }?.label.orEmpty() },
+                    SemanticAssociation::targetConceptId,
+                ))
+            if (associations.isEmpty()) Text("Aucune association souple", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+            associations.forEach { association ->
+                val target = state.snapshot.concepts.firstOrNull { it.id == association.targetConceptId }
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(target?.label ?: "Concept supprimé", style = MaterialTheme.typography.bodyMedium)
+                        Text("${SemanticAssociationStrength.fromWeight(association.weightPercent).label} · ${association.weightPercent} %${if (association.active) "" else " · inactive"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = association.active && concept.active && target?.active == true, onCheckedChange = { viewModel.setAssociationActive(association.id, it) }, enabled = concept.active && target?.active == true, modifier = Modifier.testTag("semantic-association-active-${association.id}"))
+                    TextButton(onClick = {
+                        associationToEdit = association
+                        selectedAssociationTargetId = association.targetConceptId
+                        selectedAssociationWeight = association.weightPercent
+                        associationDialogOpen = true
+                    }, modifier = Modifier.testTag("semantic-association-edit-${association.id}")) { Text("Modifier") }
+                    TextButton(onClick = { associationToDelete = association }, modifier = Modifier.testTag("semantic-association-delete-${association.id}")) { Text("Supprimer") }
+                }
+            }
+            val associationTargets = state.snapshot.concepts.filter { target ->
+                target.id != concept.id && target.active && target.businessValue != null &&
+                    SemanticDictionaryValidator.associationDimension(target.domain) == SemanticDictionaryValidator.associationDimension(concept.domain) &&
+                    SemanticDictionaryValidator.associationDimension(concept.domain) != null &&
+                    runCatching { SemanticDictionaryValidator.validateConceptMapping(target) }.isSuccess &&
+                    runCatching { SemanticDictionaryValidator.validateAssociation(concept, target, 50, state.snapshot.associations) }.isSuccess
+            }.sortedWith(frenchLabelComparator(SemanticConcept::label, SemanticConcept::id))
+            if (associationTargets.isNotEmpty()) {
+                OutlinedButton(onClick = {
+                    associationToEdit = null
+                    selectedAssociationTargetId = null
+                    selectedAssociationWeight = SemanticAssociationStrength.MEDIUM.weightPercent
+                    associationDialogOpen = true
+                }, modifier = Modifier.fillMaxWidth().testTag("semantic-association-add")) { Text("Ajouter une association souple") }
+            } else {
+                Text("Aucun concept cible compatible avec une référence métier réelle.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
+
         localError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 10.dp).testTag("semantic-form-error")) }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 10.dp).testTag("semantic-operation-error")) }
         Spacer(Modifier.height(18.dp))
@@ -434,6 +490,50 @@ fun SemanticConceptEditorScreen(
             text = { Text("Les deux concepts resteront dans le dictionnaire.") },
             confirmButton = { TextButton(onClick = { viewModel.deleteSpecialization(relation.id); relationToDelete = null }) { Text("Supprimer") } },
             dismissButton = { TextButton(onClick = { relationToDelete = null }) { Text("Annuler") } },
+        )
+    }
+    if (associationDialogOpen && concept != null) {
+        val candidates = state.snapshot.concepts.filter { target ->
+            target.id != concept.id && target.active && target.businessValue != null &&
+                SemanticDictionaryValidator.associationDimension(target.domain) == SemanticDictionaryValidator.associationDimension(concept.domain) &&
+                SemanticDictionaryValidator.associationDimension(concept.domain) != null &&
+                runCatching { SemanticDictionaryValidator.validateConceptMapping(target) }.isSuccess &&
+                (target.id == associationToEdit?.targetConceptId || runCatching { SemanticDictionaryValidator.validateAssociation(concept, target, selectedAssociationWeight, state.snapshot.associations) }.isSuccess)
+        }.sortedWith(frenchLabelComparator(SemanticConcept::label, SemanticConcept::id))
+        AlertDialog(
+            onDismissRequest = { associationDialogOpen = false },
+            title = { Text(if (associationToEdit == null) "Nouvelle association souple" else "Modifier l’association") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = { associationTargetMenu = true }, enabled = associationToEdit == null, modifier = Modifier.fillMaxWidth().testTag("semantic-association-target")) {
+                    Text(candidates.firstOrNull { it.id == selectedAssociationTargetId }?.label ?: "Choisir le concept associé")
+                }
+                DropdownMenu(expanded = associationTargetMenu, onDismissRequest = { associationTargetMenu = false }) {
+                    candidates.forEach { target -> DropdownMenuItem(text = { Text(target.label) }, onClick = { selectedAssociationTargetId = target.id; associationTargetMenu = false }) }
+                }
+                OutlinedButton(onClick = { associationWeightMenu = true }, modifier = Modifier.fillMaxWidth().testTag("semantic-association-weight")) {
+                    val strength = SemanticAssociationStrength.fromWeight(selectedAssociationWeight)
+                    Text("${strength.label} · ${strength.weightPercent} %")
+                }
+                DropdownMenu(expanded = associationWeightMenu, onDismissRequest = { associationWeightMenu = false }) {
+                    SemanticAssociationStrength.entries.forEach { strength -> DropdownMenuItem(text = { Text("${strength.label} · ${strength.weightPercent} %") }, onClick = { selectedAssociationWeight = strength.weightPercent; associationWeightMenu = false }) }
+                }
+                Text("Ce pourcentage indique une intensité relative de rapprochement, pas une probabilité.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } },
+            confirmButton = { TextButton(onClick = {
+                selectedAssociationTargetId?.let { targetId -> viewModel.saveAssociation(concept.id, targetId, selectedAssociationWeight, associationToEdit?.id) }
+                associationDialogOpen = false
+            }, enabled = selectedAssociationTargetId != null, modifier = Modifier.testTag("semantic-association-save")) { Text("Enregistrer") } },
+            dismissButton = { TextButton(onClick = { associationDialogOpen = false }, modifier = Modifier.testTag("semantic-association-cancel")) { Text("Annuler") } },
+        )
+    }
+    associationToDelete?.let { association ->
+        val targetName = state.snapshot.concepts.firstOrNull { it.id == association.targetConceptId }?.label ?: "ce concept"
+        AlertDialog(
+            onDismissRequest = { associationToDelete = null },
+            title = { Text("Supprimer l’association ?") },
+            text = { Text("Le rapprochement avec « $targetName » sera supprimé. Les deux concepts et leurs références resteront inchangés.") },
+            confirmButton = { TextButton(onClick = { viewModel.deleteAssociation(association.id); associationToDelete = null }, modifier = Modifier.testTag("semantic-association-confirm-delete")) { Text("Supprimer") } },
+            dismissButton = { TextButton(onClick = { associationToDelete = null }) { Text("Annuler") } },
         )
     }
     if (showDiscardDialog) {

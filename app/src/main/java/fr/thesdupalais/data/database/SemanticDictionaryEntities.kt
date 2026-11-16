@@ -47,3 +47,19 @@ data class SemanticRelationEntity(
     val type: String,
     val active: Boolean,
 )
+
+@Entity(
+    tableName = "semantic_associations",
+    foreignKeys = [
+        ForeignKey(entity = SemanticConceptEntity::class, parentColumns = ["id"], childColumns = ["sourceConceptId"], onDelete = ForeignKey.RESTRICT),
+        ForeignKey(entity = SemanticConceptEntity::class, parentColumns = ["id"], childColumns = ["targetConceptId"], onDelete = ForeignKey.RESTRICT),
+    ],
+    indices = [Index(value = ["sourceConceptId", "targetConceptId"], unique = true), Index(value = ["targetConceptId"])],
+)
+data class SemanticAssociationEntity(
+    @PrimaryKey val id: String,
+    val sourceConceptId: String,
+    val targetConceptId: String,
+    val weightPercent: Int,
+    val active: Boolean,
+)

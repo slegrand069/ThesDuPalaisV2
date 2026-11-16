@@ -7,6 +7,7 @@ import fr.thesdupalais.domain.semantics.SemanticConcept
 import fr.thesdupalais.domain.semantics.SemanticDictionarySnapshot
 import fr.thesdupalais.domain.semantics.SemanticExpression
 import fr.thesdupalais.domain.semantics.SemanticRelation
+import fr.thesdupalais.domain.semantics.SemanticAssociation
 import fr.thesdupalais.domain.semantics.SemanticRelationType
 import fr.thesdupalais.domain.semantics.SemanticDictionaryValidator
 import fr.thesdupalais.domain.semantics.SemanticDomain
@@ -115,6 +116,7 @@ class SemanticDictionaryRepository(
         concepts = dao.allConceptRowsForBackup(),
         expressions = dao.allExpressions(),
         relations = dao.allRelations(),
+        associations = dao.allAssociations(),
     )
 
     suspend fun validateArchive(json: String): SemanticDictionaryArchive {
@@ -129,11 +131,13 @@ class SemanticDictionaryRepository(
             val archive = SemanticDictionaryArchiveJson.decode(json)
             validateArchiveBusinessRules(archive)
             dao.clearRelationsForReplacement()
+            dao.clearAssociationsForReplacement()
             dao.clearExpressionsForReplacement()
             dao.clearConceptsForReplacement()
             for (concept in archive.concepts) dao.insertConcept(concept)
             if (archive.expressions.isNotEmpty()) dao.insertExpressions(archive.expressions)
             if (archive.relations.isNotEmpty()) dao.insertRelations(archive.relations)
+            if (archive.associations.isNotEmpty()) dao.insertAssociations(archive.associations)
             archive
         }
     }
@@ -146,12 +150,13 @@ class SemanticDictionaryRepository(
     }
 
     val snapshot: Flow<SemanticDictionarySnapshot> = combine(
-        dao.observeConcepts(), dao.observeExpressions(), dao.observeRelations(),
-    ) { concepts, expressions, relations ->
+        dao.observeConcepts(), dao.observeExpressions(), dao.observeRelations(), dao.observeAssociations(),
+    ) { concepts, expressions, relations, associations ->
         SemanticDictionarySnapshot(
             concepts.mapNotNull { row -> runCatching { SemanticConcept(row.id, SemanticDomain.valueOf(row.domain), row.label, row.active, row.businessDimension, row.businessConcept, row.businessValue) }.getOrNull() },
             expressions.map { SemanticExpression(it.id, it.conceptId, it.expression, it.normalizedForm, it.isPrimary, it.active) },
             relations.mapNotNull { row -> runCatching { SemanticRelation(row.id, row.sourceConceptId, row.targetConceptId, SemanticRelationType.valueOf(row.type), row.active) }.getOrNull() },
+            associations.map { SemanticAssociation(it.id, it.sourceConceptId, it.targetConceptId, it.weightPercent, it.active) },
         )
     }
 
@@ -237,6 +242,7 @@ class SemanticDictionaryRepository(
             if (id in BuiltInSemanticDictionary.seededConceptIds) {
                 require(dao.markConceptDeleted(id) == 1) { "Ce concept n’existe plus." }
             } else {
+                dao.deleteAssociationsForConcept(id)
                 require(dao.deleteConcept(id) == 1) { "Ce concept n’existe plus." }
             }
         }
@@ -280,6 +286,43 @@ class SemanticDictionaryRepository(
         }
     }
 
+    suspend fun saveAssociation(sourceId: String, targetId: String, weightPercent: Int, id: String? = null): SemanticAssociation = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val source = requireNotNull(dao.findConcept(sourceId)) { "Le concept source n’existe plus." }.toDomain()
+            val target = requireNotNull(dao.findConcept(targetId)) { "Le concept cible n’existe plus." }.toDomain()
+            SemanticDictionaryValidator.validateConceptMapping(target)
+            validateReferenceLink(target, target)
+            val existing = dao.allAssociations().map { it.toDomain() }
+            val current = id?.let { requireNotNull(dao.findAssociation(it)) { "Cette association n’existe plus." }.toDomain() }
+            require(current == null || (current.sourceConceptId == sourceId && current.targetConceptId == targetId)) {
+                "L’identifiant d’une association existante ne peut pas être réaffecté."
+            }
+            SemanticDictionaryValidator.validateAssociation(source, target, weightPercent, existing, current?.id)
+            val row = SemanticAssociationEntity(current?.id ?: UUID.randomUUID().toString(), sourceId, targetId, weightPercent, true)
+            if (current == null) dao.insertAssociations(listOf(row)) else dao.updateAssociation(row)
+            row.toDomain()
+        }
+    }
+
+    suspend fun setAssociationActive(id: String, active: Boolean) = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val current = requireNotNull(dao.findAssociation(id)) { "Cette association n’existe plus." }
+            if (active) {
+                val source = requireNotNull(dao.findConcept(current.sourceConceptId)) { "Le concept source n’existe plus." }.toDomain()
+                val target = requireNotNull(dao.findConcept(current.targetConceptId)) { "Le concept cible n’existe plus." }.toDomain()
+                val existing = dao.allAssociations().map { it.toDomain() }
+                SemanticDictionaryValidator.validateAssociation(source, target, current.weightPercent, existing, current.id)
+            }
+            require(dao.updateAssociationActive(id, active) == 1) { "Cette association n’existe plus." }
+        }
+    }
+
+    suspend fun deleteAssociation(id: String) = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            require(dao.deleteAssociation(id) == 1) { "Cette association n’existe plus." }
+        }
+    }
+
     private suspend fun validateReferenceLink(concept: SemanticConcept, existing: SemanticConcept?) {
         val value = concept.businessValue ?: return
         if (concept.domain in setOf(SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY)) return
@@ -300,4 +343,5 @@ class SemanticDictionaryRepository(
     private fun SemanticConcept.toEntity() = SemanticConceptEntity(id, domain.name, label, active, businessDimension, businessConcept, businessValue)
     private fun SemanticConceptEntity.toDomain() = SemanticConcept(id, SemanticDomain.valueOf(domain), label, active, businessDimension, businessConcept, businessValue)
     private fun SemanticRelationEntity.toDomain() = SemanticRelation(id, sourceConceptId, targetConceptId, SemanticRelationType.valueOf(type), active)
+    private fun SemanticAssociationEntity.toDomain() = SemanticAssociation(id, sourceConceptId, targetConceptId, weightPercent, active)
 }

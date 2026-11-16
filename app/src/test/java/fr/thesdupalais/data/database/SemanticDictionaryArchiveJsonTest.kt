@@ -41,8 +41,47 @@ class SemanticDictionaryArchiveJsonTest {
 
     @Test fun rejectsInvalidJsonAndUnsupportedFutureVersion() {
         assertThrows(Exception::class.java) { SemanticDictionaryArchiveJson.decode("{") }
-        val future = SemanticDictionaryArchiveJson.encode(sample()).replace("\"version\": 1", "\"version\": 99")
+        val future = SemanticDictionaryArchiveJson.encode(sample()).replace("\"version\": 2", "\"version\": 99")
         assertThrows(IllegalArgumentException::class.java) { SemanticDictionaryArchiveJson.decode(future) }
+    }
+
+    @Test fun v1ImportsAsCompleteDictionaryWithoutAssociations() {
+        val v1 = SemanticDictionaryArchiveJson.encode(sample())
+            .replace("\"version\": 2", "\"version\": 1")
+            .replace(Regex("\\s*,\\s*\"associations\": \\[\\]"), "")
+        val decoded = SemanticDictionaryArchiveJson.decode(v1)
+        assertTrue(decoded.associations.isEmpty())
+    }
+
+    @Test fun associationsRoundTripWithDirectionAndWeight() {
+        val source = SemanticConceptEntity("s", "AROMA", "Gourmand", true, "AROMA", "aromatic_profile", "ref:10000000-0000-0000-0000-000000000001")
+        val target = SemanticConceptEntity("t", "AROMA", "Vanillé", true, "AROMA", "aroma", "ref:10000000-0000-0000-0000-000000000002")
+        val archive = SemanticDictionaryArchive(
+            listOf(source, target),
+            listOf(
+                SemanticExpressionEntity("es", "s", "Gourmand", "gourmand", true, true),
+                SemanticExpressionEntity("et", "t", "Vanillé", "vanille", true, true),
+            ), emptyList(), listOf(SemanticAssociationEntity("a", "s", "t", 75, true)),
+        )
+        val decoded = SemanticDictionaryArchiveJson.decode(SemanticDictionaryArchiveJson.encode(archive))
+        assertEquals(listOf(SemanticAssociationEntity("a", "s", "t", 75, true)), decoded.associations)
+        assertEquals("s", decoded.associations.single().sourceConceptId)
+        assertEquals("t", decoded.associations.single().targetConceptId)
+    }
+
+    @Test fun rejectsInvalidAssociationWeightAndDuplicateDirection() {
+        val target = SemanticConceptEntity("00000000-0000-0000-0000-000000000004", "AROMA", "Vanillé", true, "AROMA", "aroma", "FRUITY")
+        val valid = sample().let { archive -> archive.copy(
+            concepts = archive.concepts + target,
+            expressions = archive.expressions + SemanticExpressionEntity("e7", target.id, target.label, "vanille", true, true),
+            associations = listOf(SemanticAssociationEntity("a", "00000000-0000-0000-0000-000000000001", target.id, 50, true)),
+        ) }
+        assertThrows(IllegalArgumentException::class.java) {
+            SemanticDictionaryArchiveJson.decode(SemanticDictionaryArchiveJson.encode(valid.copy(associations = valid.associations.map { it.copy(weightPercent = 40) })))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            SemanticDictionaryArchiveJson.decode(SemanticDictionaryArchiveJson.encode(valid.copy(associations = valid.associations + valid.associations)))
+        }
     }
 
     @Test fun rejectsCyclesAndUnknownReferencesBeforeReplacement() {

@@ -39,6 +39,58 @@ class MadjoRecommendationEngineTest {
         assertEquals(2, result.recommendations.size)
     }
 
+    @Test fun softAssociationAddsModerateTraceButNeverSatisfiesHardConstraint() {
+        val vanilla = MadjoReference("vanilla", "VANILLA", "Vanillé")
+        val linked = tea("linked", "Thé vanillé", green, aromas = listOf(vanilla), rating = 5.0).copy(stockMilliGrams = 0L)
+        val plain = tea("plain", "Thé neutre", green, rating = 5.0).copy(stockMilliGrams = 0L)
+        val softAlternative = MadjoSemanticAlternative(
+            "vanilla-concept", "Vanillé", setOf("VANILLA"), vanilla.id,
+            MadjoRelation.SEMANTIC_ASSOCIATION, "AROMA", "aroma", "VANILLA", "association-1", 75,
+        )
+        val soft = MadjoCriterion(
+            MadjoDimension.AROMA, "aroma", "GOURMAND", MadjoCriterionKind.PREFERENCE,
+            MadjoCriterionSource.INITIAL_REQUEST, displayValue = "Gourmand",
+            softAssociations = listOf(softAlternative), softAssociationSourceId = "gourmand-concept",
+        )
+        val ranked = MadjoRecommendationEngine.recommend(
+            listOf(plain, linked), MadjoRecommendationCriteria(listOf(soft)),
+            weights = MadjoRankingWeights(defaultRatingBonus = 0, defaultStockBonus = 0),
+        ).recommendations
+        assertEquals("linked", ranked.first().tea.id)
+        assertEquals(15, ranked.first().softAssociationTraces.single().contribution)
+        assertTrue(ranked.first().explanation.contains("Rapprochement souple"))
+
+        val hard = soft.copy(kind = MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
+        val strictResults = MadjoRecommendationEngine.recommend(listOf(plain, linked), MadjoRecommendationCriteria(listOf(hard)))
+        assertTrue(strictResults.recommendations.isEmpty())
+    }
+
+    @Test fun directMatchOutranksSoftAssociationAndConvergingLinksAreNotCountedTwice() {
+        val vanilla = MadjoReference("vanilla", "VANILLA", "Vanillé")
+        val directTea = tea("direct", "Direct", green, aromas = listOf(fruity), rating = 5.0).copy(stockMilliGrams = 0L)
+        val linkedTea = tea("linked", "Linked", green, aromas = listOf(vanilla), rating = 5.0).copy(stockMilliGrams = 0L)
+        fun alternative(id: String, weight: Int) = MadjoSemanticAlternative(
+            "vanilla-$id", "Vanillé", setOf("VANILLA"), vanilla.id,
+            MadjoRelation.SEMANTIC_ASSOCIATION, "AROMA", "aroma", "VANILLA", id, weight,
+        )
+        val directCriterion = MadjoCriterion(
+            MadjoDimension.AROMA, "aroma", "FRUITY", MadjoCriterionKind.PREFERENCE,
+            MadjoCriterionSource.INITIAL_REQUEST, displayValue = "Fruité",
+        )
+        val indirectCriterion = MadjoCriterion(
+            MadjoDimension.AROMA, "aroma", "GOURMAND", MadjoCriterionKind.PREFERENCE,
+            MadjoCriterionSource.INITIAL_REQUEST, displayValue = "Gourmand",
+            softAssociations = listOf(alternative("a1", 75), alternative("a2", 75)), softAssociationSourceId = "gourmand",
+        )
+        val result = MadjoRecommendationEngine.recommend(
+            listOf(linkedTea, directTea), MadjoRecommendationCriteria(listOf(directCriterion, indirectCriterion)),
+            weights = MadjoRankingWeights(defaultRatingBonus = 0, defaultStockBonus = 0),
+        ).recommendations
+        assertEquals("direct", result.first().tea.id)
+        assertEquals(1, result.single { it.tea.id == "linked" }.softAssociationTraces.size)
+        assertEquals(15, result.single { it.tea.id == "linked" }.softAssociationTraces.single().contribution)
+    }
+
     @Test fun categoryOriginAndAromaConstraintsCombineAndExplanationsUseRealFields() {
         val criteria = MadjoRecommendationCriteria(listOf(
             criterion(MadjoDimension.TYPE_COLOR, "category", "GREEN", green, MadjoCriterionKind.ABSOLUTE_CONSTRAINT),

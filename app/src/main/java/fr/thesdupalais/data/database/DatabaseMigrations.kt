@@ -163,3 +163,12 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         db.execSQL("ALTER TABLE `semantic_concepts` ADD COLUMN `deleted` INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/** Adds directed soft semantic links without changing the existing dictionary or collection tables. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS `semantic_associations` (`id` TEXT NOT NULL, `sourceConceptId` TEXT NOT NULL, `targetConceptId` TEXT NOT NULL, `weightPercent` INTEGER NOT NULL, `active` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`sourceConceptId`) REFERENCES `semantic_concepts`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT, FOREIGN KEY(`targetConceptId`) REFERENCES `semantic_concepts`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT)""")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_semantic_associations_sourceConceptId_targetConceptId` ON `semantic_associations` (`sourceConceptId`, `targetConceptId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_semantic_associations_targetConceptId` ON `semantic_associations` (`targetConceptId`)")
+    }
+}

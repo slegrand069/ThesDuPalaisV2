@@ -197,6 +197,31 @@ class SemanticDictionaryRoomTest {
         migrated.close()
     }
 
+    @Test fun migration8To9AddsSoftAssociationsWithoutChangingDictionaryRows() {
+        val helper = androidx.room.testing.MigrationTestHelper(
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation(),
+            AppDatabase::class.java,
+            emptyList(),
+            androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory(),
+        )
+        val name = "semantic-dictionary-association-migration"
+        helper.createDatabase(name, 8).apply {
+            execSQL("INSERT INTO semantic_concepts (id, domain, label, active, businessDimension, businessConcept, businessValue, deleted) VALUES ('concept-id', 'AROMA', 'Fruité', 1, 'AROMA', 'aroma', 'FRUITY', 0)")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(name, 9, true, MIGRATION_8_9)
+        migrated.query("SELECT label, deleted FROM semantic_concepts WHERE id = 'concept-id'").use { cursor ->
+            assertEquals(true, cursor.moveToFirst())
+            assertEquals("Fruité", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+        }
+        migrated.query("SELECT COUNT(*) FROM semantic_associations").use { cursor ->
+            assertEquals(true, cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migrated.close()
+    }
+
     @Test fun dictionaryArchiveRoundTripPreservesCustomizationsAndDeletionMarkers() = runBlocking {
         val seeder = SemanticDictionarySeeder(database)
         seeder.seed()
@@ -204,6 +229,7 @@ class SemanticDictionaryRoomTest {
         val dao = database.semanticDictionaryDao()
         val berriesId = BuiltInSemanticDictionary.conceptId(SemanticDomain.AROMA, "berries")
         val fruityId = BuiltInSemanticDictionary.conceptId(SemanticDomain.AROMA, "fruity")
+        val citrusId = BuiltInSemanticDictionary.conceptId(SemanticDomain.AROMA, "citrus")
         val fruity = requireNotNull(dao.findConcept(fruityId))
         repository.saveConcept(SemanticConcept(fruityId, SemanticDomain.AROMA, "Profil fruité", true,
             fruity.businessDimension, fruity.businessConcept, fruity.businessValue), listOf("note de fruits"))
@@ -212,6 +238,7 @@ class SemanticDictionaryRoomTest {
         repository.saveConcept(custom.copy(businessDimension = null, businessConcept = null, businessValue = null), listOf("fruit tropical"))
         repository.setConceptActive(custom.id, false)
         repository.deleteConcept(berriesId)
+        repository.saveAssociation(fruityId, citrusId, 75)
         val exported = SemanticDictionaryArchiveJson.encode(repository.exportArchive())
         val beforeImport = repository.exportArchive()
 
@@ -228,6 +255,7 @@ class SemanticDictionaryRoomTest {
         assertEquals("Profil fruité", dao.findConcept(fruityId)?.label)
         assertEquals(false, dao.findConcept(custom.id)?.active)
         assertEquals(true, dao.allConceptRowsForBackup().first { it.id == berriesId }.deleted)
+        assertEquals(75, restored.associations.single().weightPercent)
     }
 
     @Test fun invalidDictionaryReplacementLeavesDictionaryAndReferencesUntouched() = runBlocking {
@@ -239,7 +267,7 @@ class SemanticDictionaryRoomTest {
         val teaBefore = requireNotNull(database.teaDao().findById(teaId))
         val before = SemanticDictionaryArchiveJson.encode(repository.exportArchive())
         val referenceCount = database.referenceDao().allForBackup().size
-        val invalidFuture = before.replace("\"version\": 1", "\"version\": 2")
+        val invalidFuture = before.replace("\"version\": 2", "\"version\": 99")
         assertTrue(runCatching { repository.replaceArchive(invalidFuture) }.isFailure)
         val unknownReference = "10000000-0000-0000-0000-000000000099"
         val invalidArchive = repository.exportArchive().copy(

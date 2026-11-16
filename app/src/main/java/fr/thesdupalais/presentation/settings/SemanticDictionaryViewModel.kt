@@ -18,6 +18,7 @@ import fr.thesdupalais.domain.semantics.SemanticDomain
 import fr.thesdupalais.domain.semantics.SemanticExpression
 import fr.thesdupalais.domain.semantics.SemanticRelation
 import fr.thesdupalais.domain.semantics.SemanticRelationType
+import fr.thesdupalais.domain.semantics.SemanticAssociation
 import fr.thesdupalais.domain.semantics.SemanticDictionaryValidator
 import fr.thesdupalais.domain.semantics.BuiltInSemanticConceptIds
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,7 +132,7 @@ class SemanticDictionaryViewModel(
                 .onSuccess { archive ->
                     importInProgress.value = false
                     cancelImport()
-                    message.value = null to "Dictionnaire restauré : ${archive.concepts.size} concepts, ${archive.synonymCount} synonymes, ${archive.relationCount} relations, ${archive.inactiveConceptCount} inactifs et ${archive.tombstoneCount} suppressions logiques."
+                    message.value = null to "Dictionnaire restauré : ${archive.concepts.size} concepts, ${archive.synonymCount} synonymes, ${archive.relationCount} relations hiérarchiques, ${archive.associationCount} associations souples, ${archive.inactiveConceptCount} inactifs et ${archive.tombstoneCount} suppressions logiques."
                     onImported(archive)
                 }
                 .onFailure { error ->
@@ -170,6 +171,30 @@ class SemanticDictionaryViewModel(
             runCatching { repository.deleteSpecialization(id) }
                 .onSuccess { message.value = null to "Relation supprimée." }
                 .onFailure { error -> message.value = (error.message ?: "Impossible de supprimer cette relation.") to null }
+        }
+    }
+
+    fun saveAssociation(sourceId: String, targetId: String, weightPercent: Int, id: String? = null) {
+        viewModelScope.launch {
+            message.value = null to null
+            runCatching { repository.saveAssociation(sourceId, targetId, weightPercent, id) }
+                .onSuccess { message.value = null to "Association souple enregistrée." }
+                .onFailure { error -> message.value = (error.message ?: "Impossible d’enregistrer cette association.") to null }
+        }
+    }
+
+    fun setAssociationActive(id: String, active: Boolean) {
+        viewModelScope.launch {
+            runCatching { repository.setAssociationActive(id, active) }
+                .onFailure { error -> message.value = (error.message ?: "Impossible de modifier cette association.") to null }
+        }
+    }
+
+    fun deleteAssociation(id: String) {
+        viewModelScope.launch {
+            runCatching { repository.deleteAssociation(id) }
+                .onSuccess { message.value = null to "Association supprimée." }
+                .onFailure { error -> message.value = (error.message ?: "Impossible de supprimer cette association.") to null }
         }
     }
 
@@ -257,6 +282,11 @@ fun SemanticDomain.referenceKinds(): Set<ReferenceKind> = when (this) {
     SemanticDomain.MOMENT -> setOf(ReferenceKind.MOMENT)
     SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY -> emptySet()
 }
+
+fun SemanticDomain.supportsSoftAssociationWith(target: SemanticDomain): Boolean =
+    fr.thesdupalais.domain.semantics.SemanticDictionaryValidator.associationDimension(this) != null &&
+        fr.thesdupalais.domain.semantics.SemanticDictionaryValidator.associationDimension(this) ==
+        fr.thesdupalais.domain.semantics.SemanticDictionaryValidator.associationDimension(target)
 
 data class SemanticBusinessMapping(val businessDimension: String, val businessConcept: String, val businessValue: String)
 

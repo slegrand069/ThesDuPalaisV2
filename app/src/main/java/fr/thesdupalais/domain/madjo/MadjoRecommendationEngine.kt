@@ -49,6 +49,7 @@ data class MadjoRankedTea(
     val tea: MadjoTeaProfile,
     val score: Int,
     val explanation: String,
+    val softAssociationTraces: List<MadjoSoftAssociationTrace> = emptyList(),
 )
 
 data class MadjoRecommendationOutcome(
@@ -113,8 +114,9 @@ object MadjoRecommendationEngine {
             val softCriteria = criteria.preferences + acceptedRelaxations
             val historyScores = historyPreferenceScores(eligible, softCriteria, weights.tastingHistory)
             val ranked = eligible.map { tea ->
-                val score = score(tea, softCriteria, criteria, weights) + historyScores[tea.id].orEmpty().sum()
-                MadjoRankedTea(tea, score, explain(tea, criteria))
+                val preferenceScore = score(tea, softCriteria, criteria, weights)
+                val score = preferenceScore.score + historyScores[tea.id].orEmpty().sum()
+                MadjoRankedTea(tea, score, explain(tea, criteria, preferenceScore.softTraces), preferenceScore.softTraces)
             }.sortedWith(compareByDescending<MadjoRankedTea> { it.score }
                 .thenByDescending { it.tea.tasteRating ?: -1.0 }
                 .thenBy { it.tea.name.lowercase(Locale.ROOT) }
@@ -156,25 +158,56 @@ object MadjoRecommendationEngine {
         criterion.dimension.name, criterion.concept, criterion.referenceId.orEmpty(), criterion.value,
     ).joinToString("|")
 
+    private data class PreferenceScore(val score: Int, val softTraces: List<MadjoSoftAssociationTrace>)
+
     private fun score(
         tea: MadjoTeaProfile,
         preferences: List<MadjoCriterion>,
         allCriteria: MadjoRecommendationCriteria,
         weights: MadjoRankingWeights,
-    ): Int {
+    ): PreferenceScore {
         var total = 0
+        val bestSoftByFeature = linkedMapOf<String, Pair<Int, MadjoSoftAssociationTrace>>()
         preferences.forEach { criterion ->
             if (criterion.concept == "taste_rating" && criterion.value == "top_rated") {
                 total += ((tea.tasteRating ?: 0.0).coerceIn(0.0, 10.0) * weights.requestedRating).toInt() / 10
             } else if (matches(tea, criterion)) {
-                total += when (criterion.dimension) {
-                    MadjoDimension.TYPE_COLOR -> weights.category
-                    MadjoDimension.AROMA -> weights.aroma
-                    MadjoDimension.MOMENT -> weights.moment
-                    MadjoDimension.ORIGIN -> weights.origin
-                    MadjoDimension.TASTE_RATING -> weights.requestedRating
-                    MadjoDimension.STOCK -> weights.stockPreference
-                    MadjoDimension.TASTING_HISTORY -> 0
+                total += dimensionPreferenceWeight(criterion.dimension, weights)
+            } else if (criterion.kind == MadjoCriterionKind.PREFERENCE && criterion.softAssociations.isNotEmpty()) {
+                val sourceLabel = criterion.displayValue ?: criterion.softAssociationSourceId.orEmpty()
+                val sourceId = criterion.softAssociationSourceId.orEmpty()
+                val candidates = criterion.softAssociations.mapNotNull { alternative ->
+                    val weight = alternative.associationWeightPercent ?: return@mapNotNull null
+                    val associationId = alternative.associationId ?: return@mapNotNull null
+                    val actual = softAssociationFeature(tea, alternative) ?: return@mapNotNull null
+                    val dimension = alternativeDimension(alternative) ?: return@mapNotNull null
+                    val base = dimensionPreferenceWeight(dimension, weights)
+                    val points = (base * weight / 100).coerceAtMost(base - 1).coerceAtLeast(0)
+                    if (points == 0) return@mapNotNull null
+                    val trace = MadjoSoftAssociationTrace(
+                        associationId = associationId,
+                        sourceConceptId = sourceId,
+                        sourceConceptLabel = sourceLabel,
+                        targetConceptId = alternative.conceptId,
+                        targetConceptLabel = alternative.label,
+                        weightPercent = weight,
+                        actualCharacteristic = actual.second,
+                        contribution = points,
+                    )
+                    Triple(actual.first, points, trace)
+                }.groupBy { it.first }.mapNotNull { (_, sameFeature) -> sameFeature.maxWithOrNull(compareBy<Triple<String, Int, MadjoSoftAssociationTrace>> { it.second }.thenBy { it.third.associationId }) }
+                val cap = dimensionPreferenceWeight(criterion.dimension, weights) - 1
+                var remaining = cap.coerceAtLeast(0)
+                candidates.sortedWith(compareByDescending<Triple<String, Int, MadjoSoftAssociationTrace>> { it.second }.thenBy { it.first }).forEach { candidate ->
+                    val awarded = candidate.second.coerceAtMost(remaining)
+                    if (awarded > 0) {
+                        val trace = candidate.third.copy(contribution = awarded)
+                        val prior = bestSoftByFeature[candidate.first]
+                        if (prior == null || awarded > prior.first || (awarded == prior.first && trace.associationId < prior.second.associationId)) {
+                            bestSoftByFeature[candidate.first] = awarded to trace
+                        }
+                        remaining -= awarded
+                    }
                 }
             }
         }
@@ -184,7 +217,50 @@ object MadjoRecommendationEngine {
         if (allCriteria.criteria.none { it.dimension == MadjoDimension.STOCK } && tea.stockState == MadjoStockState.AVAILABLE) {
             total += weights.defaultStockBonus
         }
-        return total
+        val traces = bestSoftByFeature.values.map { it.second }.sortedWith(compareBy<MadjoSoftAssociationTrace> { it.sourceConceptLabel }.thenBy { it.targetConceptLabel }.thenBy { it.associationId })
+        return PreferenceScore(total + traces.sumOf(MadjoSoftAssociationTrace::contribution), traces)
+    }
+
+    private fun dimensionPreferenceWeight(dimension: MadjoDimension, weights: MadjoRankingWeights): Int = when (dimension) {
+        MadjoDimension.TYPE_COLOR -> weights.category
+        MadjoDimension.AROMA -> weights.aroma
+        MadjoDimension.MOMENT -> weights.moment
+        MadjoDimension.ORIGIN -> weights.origin
+        MadjoDimension.TASTE_RATING -> weights.requestedRating
+        MadjoDimension.STOCK -> weights.stockPreference
+        MadjoDimension.TASTING_HISTORY -> 0
+    }
+
+    private fun alternativeDimension(alternative: MadjoSemanticAlternative): MadjoDimension? = when (alternative.businessDimension) {
+        "TYPE_COLOR" -> MadjoDimension.TYPE_COLOR
+        "AROMA" -> MadjoDimension.AROMA
+        "ORIGIN" -> MadjoDimension.ORIGIN
+        "MOMENT" -> MadjoDimension.MOMENT
+        else -> null
+    }
+
+    private fun softAssociationFeature(tea: MadjoTeaProfile, alternative: MadjoSemanticAlternative): Pair<String, String>? {
+        if (alternative.relation != MadjoRelation.SEMANTIC_ASSOCIATION) return null
+        return when (alternative.businessDimension) {
+            "TYPE_COLOR" -> if ((alternative.referenceId != null && tea.categoryId == alternative.referenceId) ||
+                alternative.businessValues.any { valueMatches(it, tea.categoryKey, tea.categoryLabel) }) "CATEGORY:${tea.categoryId}" to tea.categoryLabel else null
+            "AROMA" -> {
+                val refs = if (alternative.businessConcept == "aromatic_profile") tea.aromaticProfiles else tea.aromas
+                refs.firstOrNull { ref ->
+                    (alternative.referenceId != null && alternative.referenceId == ref.id) || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+                }?.let { "${alternative.businessConcept}:${it.id}" to it.label }
+            }
+            "ORIGIN" -> {
+                val refs = if (alternative.businessConcept == "country") tea.countries else tea.regions
+                refs.firstOrNull { ref ->
+                    (alternative.referenceId != null && alternative.referenceId == ref.id) || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+                }?.let { "${alternative.businessConcept}:${it.id}" to it.label }
+            }
+            "MOMENT" -> tea.moments.firstOrNull { ref ->
+                (alternative.referenceId != null && alternative.referenceId == ref.id) || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+            }?.let { "MOMENT:${it.id}" to it.label }
+            else -> null
+        }
     }
 
     private fun matches(tea: MadjoTeaProfile, criterion: MadjoCriterion): Boolean {
@@ -246,7 +322,7 @@ object MadjoRecommendationEngine {
         }
     }
 
-    private fun explain(tea: MadjoTeaProfile, criteria: MadjoRecommendationCriteria): String {
+    private fun explain(tea: MadjoTeaProfile, criteria: MadjoRecommendationCriteria, softTraces: List<MadjoSoftAssociationTrace>): String {
         val matched = mutableListOf<String>()
         val semanticExplanations = mutableListOf<String>()
         criteria.criteria.filter { criterion -> criterion.dimension !in setOf(MadjoDimension.TASTE_RATING, MadjoDimension.STOCK) && matches(tea, criterion) }
@@ -273,6 +349,10 @@ object MadjoRecommendationEngine {
                 }
             }
         val sentences = semanticExplanations.toMutableList()
+        softTraces.forEach { trace ->
+            val strength = when (trace.weightPercent) { 25 -> "faible"; 50 -> "moyenne"; 75 -> "forte"; else -> "modérée" }
+            sentences += "Rapprochement souple ($strength) entre « ${trace.sourceConceptLabel} » et « ${trace.targetConceptLabel} », via ${trace.actualCharacteristic} : +${trace.contribution} points de pertinence."
+        }
         if (matched.isNotEmpty()) sentences += "Correspond à ta demande de ${matched.distinct().joinToString(", ")}."
         criteria.criteria.filter { it.dimension == MadjoDimension.TASTING_HISTORY && matches(tea, it) }.forEach { criterion ->
             sentences += when (criterion.concept) {
