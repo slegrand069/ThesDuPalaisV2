@@ -670,7 +670,7 @@ object MadjoConversationEngine {
             .map { it.normalizedForm.ifBlank { MadjoSemanticResolver.normalize(it.expression) } }
         val values = (expressions + mappingValue + concept.label).toSet()
         val referenceCandidates = referencesFor(domain, mappingDimension, mappingConcept, vocabulary).filter { reference ->
-            values.any { value -> semanticValueMatches(value, reference.semanticKey, reference.label) }
+            values.any { value -> value.equals("ref:${reference.id}", ignoreCase = true) || semanticValueMatches(value, reference.semanticKey, reference.label) }
         }
         return MadjoSemanticAlternative(
             conceptId = concept.id,

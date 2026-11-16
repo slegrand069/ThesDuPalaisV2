@@ -1,6 +1,7 @@
 package fr.thesdupalais.data.database
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -14,6 +15,7 @@ data class SemanticConceptEntity(
     val businessDimension: String?,
     val businessConcept: String?,
     val businessValue: String?,
+    @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
 )
 
 @Entity(

@@ -142,6 +142,66 @@ object MadjoSemanticResolver {
 
 /** Validation is separate from resolving: it may inspect a graph, while resolution never traverses it. */
 object SemanticDictionaryValidator {
+    private val internalIntentDomains = setOf(SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY)
+
+    fun validateConceptMapping(concept: SemanticConcept) {
+        val parts = listOf(concept.businessDimension, concept.businessConcept, concept.businessValue)
+        require(parts.all { it == null } || parts.all { !it.isNullOrBlank() }) {
+            "La liaison métier doit être complète ou vide."
+        }
+        if (parts.all { it == null }) return
+        require(concept.domain !in internalIntentDomains) {
+            "Les liaisons internes de ce domaine sont réservées aux intentions Madjo."
+        }
+        val valid = when (concept.domain) {
+            SemanticDomain.AROMA -> concept.businessDimension == "AROMA" && concept.businessConcept == "aroma"
+            SemanticDomain.AROMATIC_PROFILE -> concept.businessDimension == "AROMA" && concept.businessConcept == "aromatic_profile"
+            SemanticDomain.CATEGORY -> concept.businessDimension == "TYPE_COLOR" && concept.businessConcept == "category"
+            SemanticDomain.ORIGIN -> concept.businessDimension == "ORIGIN" && concept.businessConcept in setOf("country", "region")
+            SemanticDomain.MOMENT -> concept.businessDimension == "MOMENT" && concept.businessConcept == "moment"
+            SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY -> false
+        }
+        require(valid) { "Cette liaison métier n’est pas compatible avec le domaine choisi." }
+    }
+
+    fun isReferenceKindAllowed(domain: SemanticDomain, referenceKind: String): Boolean = when (domain) {
+        SemanticDomain.AROMA -> referenceKind == "AROMA"
+        SemanticDomain.AROMATIC_PROFILE -> referenceKind == "AROMATIC_PROFILE"
+        SemanticDomain.CATEGORY -> referenceKind == "CATEGORY"
+        SemanticDomain.ORIGIN -> referenceKind == "COUNTRY" || referenceKind == "REGION"
+        SemanticDomain.MOMENT -> referenceKind == "MOMENT"
+        SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY -> false
+    }
+
+    fun normalizedExpressions(label: String, synonyms: List<String>): List<String> {
+        require(label.isNotBlank()) { "Le libellé est obligatoire." }
+        val forms = listOf(label.trim()) + synonyms.map(String::trim).filter(String::isNotBlank)
+        val normalized = forms.map(MadjoSemanticResolver::normalize)
+        require(normalized.all(String::isNotBlank)) { "Les expressions ne peuvent pas être vides." }
+        require(normalized.distinct().size == normalized.size) {
+            "Le libellé ou un synonyme est présent plusieurs fois après normalisation."
+        }
+        return normalized
+    }
+
+    fun checkSynonymConflicts(domain: SemanticDomain, forms: List<String>, dictionary: SemanticDictionarySnapshot, excludingConceptId: String? = null) {
+        val normalizedForms = forms.map(MadjoSemanticResolver::normalize)
+        val conceptsById = dictionary.concepts.associateBy(SemanticConcept::id)
+        normalizedForms.forEach { form ->
+            val conflict = dictionary.expressions.firstOrNull { expression ->
+                expression.expression.isNotBlank() && MadjoSemanticResolver.normalize(expression.normalizedForm.ifBlank { expression.expression }) == form &&
+                    conceptsById[expression.conceptId]?.let { it.domain == domain && it.id != excludingConceptId } == true
+            }
+            if (conflict != null) {
+                val owner = conceptsById[conflict.conceptId]?.label ?: "un autre concept"
+                throw IllegalArgumentException("« ${conflict.expression} » est déjà associé au concept « $owner ».")
+            }
+        }
+    }
+
+    fun isProtectedSystemConcept(concept: SemanticConcept): Boolean =
+        BuiltInSemanticConceptIds.protected.contains(concept.id)
+
     fun validateSpecialization(source: SemanticConcept, target: SemanticConcept, existing: List<SemanticRelation>) {
         require(source.id != target.id) { "Un concept ne peut pas se spécialiser lui-même." }
         require(source.domain == target.domain) { "Une spécialisation doit rester dans le même domaine." }
@@ -161,4 +221,17 @@ object SemanticDictionaryValidator {
             if (visited.add(current)) adjacency[current].orEmpty().forEach(pending::addLast)
         }
     }
+}
+
+/** Stable IDs of intent concepts whose business meaning is wired directly into Madjo. */
+object BuiltInSemanticConceptIds {
+    val protected: Set<String> = setOf(
+        "top-rated" to SemanticDomain.TASTE_RATING,
+        "available-stock" to SemanticDomain.STOCK,
+        "abundant-stock" to SemanticDomain.STOCK,
+        "frequent-tasting" to SemanticDomain.TASTING_HISTORY,
+        "forgotten-tasting" to SemanticDomain.TASTING_HISTORY,
+    ).map { (key, domain) ->
+        java.util.UUID.nameUUIDFromBytes("semantic-concept-${domain.name.lowercase()}.$key".toByteArray(Charsets.UTF_8)).toString()
+    }.toSet()
 }

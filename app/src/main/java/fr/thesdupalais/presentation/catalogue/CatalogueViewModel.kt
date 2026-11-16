@@ -19,6 +19,7 @@ import fr.thesdupalais.domain.madjo.MadjoTeaProfile
 import fr.thesdupalais.domain.madjo.MadjoVocabulary
 import fr.thesdupalais.domain.semantics.SemanticDictionarySnapshot
 import fr.thesdupalais.domain.model.ReferenceValue
+import fr.thesdupalais.domain.model.frenchLabelComparator
 import fr.thesdupalais.domain.references.StandardReferenceSeeds
 import java.text.Normalizer
 import java.util.Locale
@@ -305,7 +306,8 @@ internal fun matchesTasteRating(rating: Double?, filter: TasteRatingFilter): Boo
 }
 
 private fun List<TeaWithCatalogData>.toFilterOptions(): CatalogueFilterOptions {
-    fun sorted(values: List<ReferenceEntity>) = values.distinctBy { it.id }.sortedBy { it.label.lowercase(Locale.FRENCH) }
+    fun sorted(values: List<ReferenceEntity>) = values.distinctBy { it.id }
+        .sortedWith(frenchLabelComparator(ReferenceEntity::label) { it.id.toString() })
     val rows = this // observeActiveCatalog() already excludes archived teas; selected filters never narrow these rows.
     return CatalogueFilterOptions(
         categories = sorted(rows.map { it.category }),

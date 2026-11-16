@@ -2,8 +2,7 @@ package fr.thesdupalais.presentation.references
 
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceSummary
-import java.text.Collator
-import java.util.Locale
+import fr.thesdupalais.domain.model.frenchLabelComparator
 
 data class ReferenceListSection(
     val title: String,
@@ -17,12 +16,8 @@ fun geographicReferenceSections(
 ): List<ReferenceListSection>? {
     if (kind != ReferenceKind.COUNTRY && kind != ReferenceKind.REGION) return null
 
-    val collator = Collator.getInstance(Locale.FRENCH).apply { strength = Collator.PRIMARY }
     val alphabetical: (List<ReferenceSummary>) -> List<ReferenceSummary> = { values ->
-        values.sortedWith { first, second ->
-            collator.compare(first.value.label, second.value.label).takeIf { it != 0 }
-                ?: first.value.label.compareTo(second.value.label, ignoreCase = true)
-        }
+        values.sortedWith(frenchLabelComparator({ it.value.label }, { it.value.id.toString() }))
     }
     val used = alphabetical(references.filter { it.activeTeaUsageCount > 0 })
     val other = alphabetical(references.filter { it.activeTeaUsageCount == 0 })

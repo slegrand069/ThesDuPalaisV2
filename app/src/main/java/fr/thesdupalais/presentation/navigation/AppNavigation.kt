@@ -63,6 +63,10 @@ import fr.thesdupalais.presentation.settings.SettingsPreferencesSection
 import fr.thesdupalais.presentation.settings.BackupExportSection
 import fr.thesdupalais.presentation.settings.BackupRestoreSection
 import fr.thesdupalais.presentation.settings.BackupMergeApplySection
+import fr.thesdupalais.presentation.settings.SemanticDictionaryViewModel
+import fr.thesdupalais.presentation.settings.SemanticDictionaryViewModelFactory
+import fr.thesdupalais.presentation.settings.SemanticDictionaryScreen
+import fr.thesdupalais.presentation.settings.SemanticConceptEditorScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueScreen
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModel
 import fr.thesdupalais.presentation.catalogue.CatalogueViewModelFactory
@@ -90,6 +94,10 @@ private const val REFERENCE_LIST_ROUTE = "references/{kind}"
 private const val REFERENCE_CREATE_ROUTE = "references/{kind}/create"
 private const val REFERENCE_EDIT_ROUTE = "references/{kind}/edit/{referenceId}"
 private const val ARTICLE_DETAIL_ROUTE = "savoirs/article/{articleId}"
+private const val SETTINGS_HOME_ROUTE = "parametres/home"
+private const val MADJO_DICTIONARY_ROUTE = "parametres/madjo/dictionnaire"
+private const val MADJO_CONCEPT_NEW_ROUTE = "parametres/madjo/dictionnaire/nouveau"
+private const val MADJO_CONCEPT_DETAIL_ROUTE = "parametres/madjo/dictionnaire/concept/{conceptId}"
 
 private enum class MainDestination(val route: String, val label: String, val icon: String) {
     CATALOGUE("catalogue", "Catalogue", "catalogue"),
@@ -377,6 +385,55 @@ private fun BottomNavigationIcon(kind: String, selected: Boolean) {
 
 @Composable
 private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit) {
+    val settingsNavController = rememberNavController()
+    val dictionaryViewModel: SemanticDictionaryViewModel = viewModel(
+        factory = SemanticDictionaryViewModelFactory(container.semanticDictionaryRepository, container.database.referenceDao()),
+    )
+    NavHost(settingsNavController, startDestination = SETTINGS_HOME_ROUTE, modifier = Modifier.fillMaxSize()) {
+        composable(SETTINGS_HOME_ROUTE) {
+            SettingsHomeScreen(viewModel, container, onOpenReference) {
+                dictionaryViewModel.clearMessage()
+                settingsNavController.navigate(MADJO_DICTIONARY_ROUTE)
+            }
+        }
+        composable(MADJO_DICTIONARY_ROUTE) {
+            SemanticDictionaryScreen(
+                viewModel = dictionaryViewModel,
+                onBack = { settingsNavController.popBackStack() },
+                onEditConcept = { id -> dictionaryViewModel.clearMessage(); settingsNavController.navigate("parametres/madjo/dictionnaire/concept/$id") },
+                onCreateConcept = { dictionaryViewModel.clearMessage(); settingsNavController.navigate(MADJO_CONCEPT_NEW_ROUTE) },
+            )
+        }
+        composable(MADJO_CONCEPT_NEW_ROUTE) {
+            SemanticConceptEditorScreen(
+                viewModel = dictionaryViewModel,
+                conceptId = null,
+                onCancel = { settingsNavController.popBackStack() },
+                onSaved = { id ->
+                    settingsNavController.navigate("parametres/madjo/dictionnaire/concept/$id") {
+                        popUpTo(MADJO_DICTIONARY_ROUTE)
+                    }
+                },
+                onDeleted = { settingsNavController.popBackStack(MADJO_DICTIONARY_ROUTE, false) },
+            )
+        }
+        composable(
+            route = MADJO_CONCEPT_DETAIL_ROUTE,
+            arguments = listOf(navArgument("conceptId") { type = NavType.StringType }),
+        ) { entry ->
+            SemanticConceptEditorScreen(
+                viewModel = dictionaryViewModel,
+                conceptId = entry.arguments?.getString("conceptId"),
+                onCancel = { settingsNavController.popBackStack() },
+                onSaved = { settingsNavController.popBackStack() },
+                onDeleted = { settingsNavController.popBackStack(MADJO_DICTIONARY_ROUTE, false) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenMadjoDictionary: () -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     val preferencesLoaded by viewModel.preferencesLoaded.collectAsStateWithLifecycle()
     val recovery by container.recoveryInspection.collectAsStateWithLifecycle()
@@ -401,6 +458,20 @@ private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer
                 if (rowFamilies.size == 1) Spacer(Modifier.weight(1f))
             }
             Spacer(Modifier.height(8.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("Madjo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            onClick = onOpenMadjoDictionary,
+            modifier = Modifier.fillMaxWidth().height(54.dp).testTag("settings-madjo-dictionary"),
+            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Dictionnaire", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+            }
         }
         Spacer(Modifier.height(14.dp))
         Text("Préférences", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

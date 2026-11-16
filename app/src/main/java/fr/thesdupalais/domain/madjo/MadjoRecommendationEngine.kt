@@ -203,9 +203,9 @@ object MadjoRecommendationEngine {
                 (alternative.referenceId != null && refs.any { it.id == alternative.referenceId }) ||
                     refs.any { ref -> alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) } }
             })
-            "moment" -> refMatches(refId, criterion.value, tea.moments)
-            "country" -> refMatches(refId, criterion.value, tea.countries)
-            "region" -> refMatches(refId, criterion.value, tea.regions)
+            "moment" -> refMatches(refId, criterion.value, tea.moments) || semanticReferenceMatches(criterion, tea.moments)
+            "country" -> refMatches(refId, criterion.value, tea.countries) || semanticReferenceMatches(criterion, tea.countries)
+            "region" -> refMatches(refId, criterion.value, tea.regions) || semanticReferenceMatches(criterion, tea.regions)
             "taste_rating" -> ratingMatches(tea.tasteRating, criterion.value)
             "stock" -> when (criterion.value) {
                 "available" -> tea.stockState == MadjoStockState.AVAILABLE
@@ -223,6 +223,11 @@ object MadjoRecommendationEngine {
     private fun refMatches(id: String?, value: String, refs: List<MadjoReference>): Boolean = refs.any { ref ->
         (id != null && ref.id == id) || (id == null && valueMatches(value, ref.semanticKey, ref.label))
     }
+
+    private fun semanticReferenceMatches(criterion: MadjoCriterion, refs: List<MadjoReference>): Boolean =
+        criterion.semanticExpansions.any { alternative -> refs.any { ref ->
+            alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+        } }
 
     private fun valueMatches(value: String, key: String?, label: String): Boolean =
         normalize(value.replace('_', ' ')) == normalize(key.orEmpty().replace('_', ' ')) ||

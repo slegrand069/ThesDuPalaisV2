@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import fr.thesdupalais.data.database.RoomReferenceRepository
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceValue
+import fr.thesdupalais.domain.model.frenchLabelComparator
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,7 +37,7 @@ class ReferenceEditViewModel(
     init {
         viewModelScope.launch {
             repository.observeCountries().collect { countries ->
-                _uiState.update { it.copy(countries = countries) }
+                _uiState.update { it.copy(countries = countries.sortedWith(frenchLabelComparator(ReferenceValue::label) { it.id.toString() })) }
             }
         }
         viewModelScope.launch {

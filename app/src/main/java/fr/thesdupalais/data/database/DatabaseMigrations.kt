@@ -156,3 +156,10 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_semantic_relations_targetConceptId` ON `semantic_relations` (`targetConceptId`)")
     }
 }
+
+/** Records semantic tombstones so deleted bundled concepts and expressions are not reseeded. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `semantic_concepts` ADD COLUMN `deleted` INTEGER NOT NULL DEFAULT 0")
+    }
+}

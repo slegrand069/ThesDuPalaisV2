@@ -7,6 +7,7 @@ import fr.thesdupalais.data.database.RoomReferenceRepository
 import fr.thesdupalais.data.database.ReferenceDeletionStatus
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceSummary
+import fr.thesdupalais.domain.model.frenchLabelComparator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -37,7 +38,9 @@ class ReferenceListViewModel(
     init {
         viewModelScope.launch {
             repository.observe(kind).collect { references ->
-                _uiState.update { it.copy(references = references, isLoading = false) }
+                _uiState.update {
+                    it.copy(references = references.sortedWith(frenchLabelComparator({ summary -> summary.value.label }, { summary -> summary.value.id.toString() })), isLoading = false)
+                }
             }
         }
     }

@@ -10,6 +10,7 @@ import fr.thesdupalais.domain.semantics.SemanticRelation
 import fr.thesdupalais.domain.semantics.SemanticRelationType
 import fr.thesdupalais.domain.semantics.SemanticDictionaryValidator
 import fr.thesdupalais.domain.semantics.SemanticDomain
+import fr.thesdupalais.domain.semantics.BuiltInSemanticConceptIds
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.nio.charset.StandardCharsets
@@ -76,6 +77,12 @@ object BuiltInSemanticDictionary {
         relation("asia", "vietnam"),
     )
 
+    val protectedConceptIds: Set<String> = setOf("top-rated", "available-stock", "abundant-stock", "frequent-tasting", "forgotten-tasting")
+        .mapNotNull { key -> concepts.firstOrNull { it.key == key }?.let { keys.getValue(key) } }.toSet()
+    val seededConceptIds: Set<String> = conceptRows.map(SemanticConceptEntity::id).toSet()
+    val seededExpressionIds: Set<String> = expressionRows.map(SemanticExpressionEntity::id).toSet()
+    val seededRelationIds: Set<String> = relationRows.map(SemanticRelationEntity::id).toSet()
+
     fun stableId(namespace: String, key: String): String = UUID.nameUUIDFromBytes("$namespace.$key".toByteArray(StandardCharsets.UTF_8)).toString()
     fun conceptId(domain: SemanticDomain, key: String): String = stableId("semantic-concept-${domain.name.lowercase()}", key)
     private fun relation(source: String, target: String) = SemanticRelationEntity(
@@ -104,6 +111,40 @@ class SemanticDictionaryRepository(
 ) {
     private val dao get() = database.semanticDictionaryDao()
 
+    suspend fun exportArchive(): SemanticDictionaryArchive = SemanticDictionaryArchive(
+        concepts = dao.allConceptRowsForBackup(),
+        expressions = dao.allExpressions(),
+        relations = dao.allRelations(),
+    )
+
+    suspend fun validateArchive(json: String): SemanticDictionaryArchive {
+        val archive = SemanticDictionaryArchiveJson.decode(json)
+        validateArchiveBusinessRules(archive)
+        return archive
+    }
+
+    /** Replaces only semantic dictionary rows; all checks and writes share one Room transaction. */
+    suspend fun replaceArchive(json: String): SemanticDictionaryArchive = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val archive = SemanticDictionaryArchiveJson.decode(json)
+            validateArchiveBusinessRules(archive)
+            dao.clearRelationsForReplacement()
+            dao.clearExpressionsForReplacement()
+            dao.clearConceptsForReplacement()
+            for (concept in archive.concepts) dao.insertConcept(concept)
+            if (archive.expressions.isNotEmpty()) dao.insertExpressions(archive.expressions)
+            if (archive.relations.isNotEmpty()) dao.insertRelations(archive.relations)
+            archive
+        }
+    }
+
+    private suspend fun validateArchiveBusinessRules(archive: SemanticDictionaryArchive) {
+        val availableReferences = database.referenceDao().allForBackup()
+            .filter { it.archivedAt == null }
+            .associate { it.id.toString() to it.kind }
+        SemanticDictionaryArchiveRules.validateBusinessLinks(archive, availableReferences)
+    }
+
     val snapshot: Flow<SemanticDictionarySnapshot> = combine(
         dao.observeConcepts(), dao.observeExpressions(), dao.observeRelations(),
     ) { concepts, expressions, relations ->
@@ -114,10 +155,90 @@ class SemanticDictionaryRepository(
         )
     }
 
-    suspend fun saveConcept(concept: SemanticConcept) = writeCoordinator.withWritePermit {
+    suspend fun saveConcept(concept: SemanticConcept, synonyms: List<String>) = writeCoordinator.withWritePermit {
         database.withTransaction {
-            val row = concept.toEntity()
-            if (dao.findConcept(concept.id) == null) dao.insertSeedConcepts(listOf(row)) else dao.updateConcept(row)
+            require(concept.label.isNotBlank()) { "Le libellé est obligatoire." }
+            val existingRow = dao.findConcept(concept.id)
+            val existing = existingRow?.toDomain()
+            require(existing == null || existing.domain == concept.domain) { "Le domaine d’un concept existant ne peut pas être modifié." }
+            if (existing != null && BuiltInSemanticConceptIds.protected.contains(existing.id)) {
+                require(existing.businessDimension == concept.businessDimension && existing.businessConcept == concept.businessConcept && existing.businessValue == concept.businessValue) {
+                    "La liaison interne de ce concept système ne peut pas être modifiée."
+                }
+                require(concept.active) { "Ce concept système doit rester actif." }
+            } else SemanticDictionaryValidator.validateConceptMapping(concept)
+
+            val normalizedForms = SemanticDictionaryValidator.normalizedExpressions(concept.label, synonyms)
+            normalizedForms.forEach { form ->
+                val conflict = dao.findExpressionConflict(concept.domain.name, form, concept.id)
+                require(conflict == null) {
+                    "« ${conflict?.expression} » est déjà associé au concept « ${conflict?.label} »."
+                }
+            }
+            validateReferenceLink(concept, existing)
+
+            val existingExpressions = existing?.let { dao.expressionsForConcept(concept.id) }.orEmpty()
+            val primaryId = existingExpressions.firstOrNull(SemanticExpressionEntity::isPrimary)?.id ?: UUID.randomUUID().toString()
+            val forms = listOf(concept.label.trim()) + synonyms.map(String::trim).filter(String::isNotBlank)
+            val oldIdsByForm = existingExpressions.associate { it.normalizedForm to it.id }
+            val expressionRows = forms.mapIndexed { index, form ->
+                val normalized = normalizedForms[index]
+                SemanticExpressionEntity(
+                    id = if (index == 0) primaryId else oldIdsByForm[normalized] ?: UUID.randomUUID().toString(),
+                    conceptId = concept.id,
+                    expression = form,
+                    normalizedForm = normalized,
+                    isPrimary = index == 0,
+                    active = concept.active,
+                )
+            }
+            if (existing == null) dao.insertConcept(concept.toEntity()) else dao.updateConcept(concept.toEntity())
+            val desiredIds = expressionRows.map(SemanticExpressionEntity::id).toSet()
+            val oldById = existingExpressions.associateBy(SemanticExpressionEntity::id)
+            val toInsert = expressionRows.filter { it.id !in oldById }
+            for (row in expressionRows.filter { it.id in oldById }) dao.updateExpression(row)
+            if (toInsert.isNotEmpty()) dao.insertExpressions(toInsert)
+            existingExpressions.filter { it.expression.isNotEmpty() && it.id !in desiredIds }.forEach { row ->
+                if (row.id in BuiltInSemanticDictionary.seededExpressionIds) dao.tombstoneExpression(row.id)
+                else dao.deleteExpression(row.id)
+            }
+        }
+    }
+
+    suspend fun setConceptActive(id: String, active: Boolean) = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val current = requireNotNull(dao.findConcept(id)) { "Ce concept n’existe plus." }.toDomain()
+            require(active || current.id !in BuiltInSemanticConceptIds.protected) { "Ce concept système ne peut pas être désactivé." }
+            dao.updateConcept(current.copy(active = active).toEntity())
+            dao.expressionsForConcept(id).filter { it.expression.isNotEmpty() }.forEach { expression -> dao.updateExpression(expression.copy(active = active)) }
+        }
+    }
+
+    data class DeleteImpact(val label: String, val synonymCount: Int, val relationCount: Int, val protected: Boolean)
+
+    suspend fun deleteImpact(id: String): DeleteImpact {
+        val concept = requireNotNull(dao.findConcept(id)) { "Ce concept n’existe plus." }.toDomain()
+        return DeleteImpact(concept.label, dao.countExpressions(id), dao.countRelations(id), concept.id in BuiltInSemanticConceptIds.protected)
+    }
+
+    suspend fun deleteConcept(id: String) = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val concept = requireNotNull(dao.findConcept(id)) { "Ce concept n’existe plus." }.toDomain()
+            require(concept.id !in BuiltInSemanticConceptIds.protected) { "Ce concept système ne peut pas être supprimé." }
+            dao.relationsForConcept(id).filter(SemanticRelationEntity::active).forEach { relation ->
+                if (relation.id in BuiltInSemanticDictionary.seededRelationIds) dao.deactivateRelation(relation.id)
+                else dao.deleteRelation(relation.id)
+            }
+            val expressions = dao.expressionsForConcept(id)
+            expressions.filter { it.expression.isNotEmpty() }.forEach { expression ->
+                if (expression.id in BuiltInSemanticDictionary.seededExpressionIds) dao.tombstoneExpression(expression.id)
+                else dao.deleteExpression(expression.id)
+            }
+            if (id in BuiltInSemanticDictionary.seededConceptIds) {
+                require(dao.markConceptDeleted(id) == 1) { "Ce concept n’existe plus." }
+            } else {
+                require(dao.deleteConcept(id) == 1) { "Ce concept n’existe plus." }
+            }
         }
     }
 
@@ -139,12 +260,40 @@ class SemanticDictionaryRepository(
             val concepts = dao.allConcepts().mapNotNull { row -> runCatching { row.toDomain() }.getOrNull() }.associateBy(SemanticConcept::id)
             val source = requireNotNull(concepts[sourceId]) { "Le concept général est introuvable." }
             val target = requireNotNull(concepts[targetId]) { "Le concept spécialisé est introuvable." }
+            require(source.active && target.active) { "Les deux concepts doivent être actifs." }
             val relations = dao.allRelations().mapNotNull { row -> runCatching { row.toDomain() }.getOrNull() }
             SemanticDictionaryValidator.validateSpecialization(source, target, relations)
-            dao.insertRelation(SemanticRelationEntity(
+            val existing = dao.findRelation(sourceId, targetId, SemanticRelationType.SPECIALIZATION.name)
+            require(existing == null || !existing.active) { "Cette relation existe déjà." }
+            val row = SemanticRelationEntity(
                 BuiltInSemanticDictionary.stableId("semantic-relation", "$sourceId:$targetId:SPECIALIZATION"),
                 sourceId, targetId, SemanticRelationType.SPECIALIZATION.name, true,
-            ))
+            )
+            if (existing == null) dao.insertRelation(row) else dao.updateRelation(existing.copy(active = true))
+        }
+    }
+
+    suspend fun deleteSpecialization(id: String) = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            if (id in BuiltInSemanticDictionary.seededRelationIds) require(dao.deactivateRelation(id) == 1) { "Cette relation n’existe plus." }
+            else require(dao.deleteRelation(id) == 1) { "Cette relation n’existe plus." }
+        }
+    }
+
+    private suspend fun validateReferenceLink(concept: SemanticConcept, existing: SemanticConcept?) {
+        val value = concept.businessValue ?: return
+        if (concept.domain in setOf(SemanticDomain.TASTE_RATING, SemanticDomain.STOCK, SemanticDomain.TASTING_HISTORY)) return
+        if (!value.startsWith("ref:", ignoreCase = true)) {
+            require(concept.id in BuiltInSemanticDictionary.seededConceptIds && existing != null &&
+                existing.businessDimension == concept.businessDimension && existing.businessConcept == concept.businessConcept && existing.businessValue == value) {
+                "Choisissez une référence existante dans ThésDuPalais."
+            }
+            return
+        }
+        val id = runCatching { UUID.fromString(value.substringAfter(':')) }.getOrElse { throw IllegalArgumentException("La référence métier sélectionnée n’est pas valide.") }
+        val reference = requireNotNull(database.referenceDao().findById(id)) { "La référence métier sélectionnée n’existe plus." }
+        require(SemanticDictionaryValidator.isReferenceKindAllowed(concept.domain, reference.kind) && reference.archivedAt == null) {
+            "Cette référence n’est plus disponible dans le domaine du concept."
         }
     }
 

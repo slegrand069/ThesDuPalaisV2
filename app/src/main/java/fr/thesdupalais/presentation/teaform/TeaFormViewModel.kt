@@ -10,6 +10,7 @@ import fr.thesdupalais.domain.quantity.formatGrams
 import fr.thesdupalais.domain.quantity.parseOptionalGramsMilliGrams
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceValue
+import fr.thesdupalais.domain.model.frenchLabelComparator
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -114,7 +115,8 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
                 repository.observeSelectableReferences(kind).collect { values ->
                     _uiState.update {
                         it.copy(
-                            references = it.references + (kind to (values + retainedArchivedReferences[kind].orEmpty()).distinctBy { value -> value.id }),
+                            references = it.references + (kind to (values + retainedArchivedReferences[kind].orEmpty()).distinctBy { value -> value.id }
+                                .sortedWith(frenchLabelComparator(ReferenceValue::label) { value -> value.id.toString() })),
                             loadedReferenceKinds = it.loadedReferenceKinds + kind,
                         )
                     }
@@ -178,6 +180,7 @@ class TeaFormViewModel(private val repository: TeaRepository, editTeaId: UUID? =
                                 stockInput = draft.stockInput,
                                 references = state.references.mapValues { (kind, options) ->
                                     (options + retainedArchivedReferences[kind].orEmpty()).distinctBy { it.id }
+                                        .sortedWith(frenchLabelComparator(ReferenceValue::label) { value -> value.id.toString() })
                                 },
                                 initialDraft = draft,
                                 isLoadingTea = false,

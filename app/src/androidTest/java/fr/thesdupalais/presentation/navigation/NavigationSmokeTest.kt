@@ -52,6 +52,18 @@ class NavigationSmokeTest {
     }
 
     @Test
+    fun settingsOpensMadjoDictionaryAndReturnsToSettings() {
+        openCatalogueIfFirstRun()
+        composeRule.onNodeWithTag("bottom-tab-parametres").performClick()
+        composeRule.onNodeWithTag("settings-madjo-dictionary").performScrollTo().performClick()
+        composeRule.onNodeWithTag("semantic-domain-picker").assertIsDisplayed()
+        composeRule.onNodeWithTag("semantic-search").assertIsDisplayed()
+        composeRule.onNodeWithTag("semantic-create").assertIsDisplayed()
+        composeRule.onNodeWithTag("semantic-list-back").performClick()
+        composeRule.onNodeWithTag("settings-madjo-dictionary").assertIsDisplayed()
+    }
+
+    @Test
     fun bottomBarStaysAboveTheSystemNavigationInset() {
         openCatalogueIfFirstRun()
         composeRule.onNodeWithTag("main-bottom-bar").assertIsDisplayed()
