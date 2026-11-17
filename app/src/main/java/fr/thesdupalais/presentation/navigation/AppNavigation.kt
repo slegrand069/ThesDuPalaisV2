@@ -1,5 +1,7 @@
 package fr.thesdupalais.presentation.navigation
 
+import android.widget.Toast
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -84,6 +86,9 @@ import fr.thesdupalais.presentation.articles.ArticlesViewModelFactory
 import fr.thesdupalais.presentation.articles.ArticleDetailScreen
 import fr.thesdupalais.presentation.articles.ArticleDetailViewModel
 import fr.thesdupalais.presentation.articles.ArticleDetailViewModelFactory
+import fr.thesdupalais.presentation.statistics.StatisticsScreen
+import fr.thesdupalais.presentation.statistics.StatisticsViewModel
+import fr.thesdupalais.presentation.statistics.StatisticsViewModelFactory
 import java.util.UUID
 import kotlinx.coroutines.flow.map
 
@@ -95,19 +100,23 @@ private const val REFERENCE_CREATE_ROUTE = "references/{kind}/create"
 private const val REFERENCE_EDIT_ROUTE = "references/{kind}/edit/{referenceId}"
 private const val ARTICLE_DETAIL_ROUTE = "savoirs/article/{articleId}"
 private const val SETTINGS_HOME_ROUTE = "parametres/home"
+private const val STATISTICS_ROUTE = "statistiques"
 private const val MADJO_DICTIONARY_ROUTE = "parametres/madjo/dictionnaire"
 private const val MADJO_CONCEPT_NEW_ROUTE = "parametres/madjo/dictionnaire/nouveau"
 private const val MADJO_CONCEPT_DETAIL_ROUTE = "parametres/madjo/dictionnaire/concept/{conceptId}"
 
 private enum class MainDestination(val route: String, val label: String, val icon: String) {
     CATALOGUE("catalogue", "Catalogue", "catalogue"),
+    INVENTORY("inventaire", "Inventaire", "inventory"),
     KNOWLEDGE("savoirs", "Savoirs", "knowledge"),
+    STATISTICS(STATISTICS_ROUTE, "Stats", "statistics"),
     SETTINGS("parametres", "Paramètres", "settings"),
 }
 
 @Composable
 fun AppNavigation(container: AppContainer) {
     val navController = rememberNavController()
+    val context = LocalContext.current
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
 
@@ -130,10 +139,15 @@ fun AppNavigation(container: AppContainer) {
                     MainDestination.entries.forEach { destination ->
                         val selected = currentDestination?.hierarchy?.any { it.route == destination.route } == true ||
                             (destination == MainDestination.KNOWLEDGE && currentDestination?.route?.startsWith("savoirs") == true) ||
+                            (destination == MainDestination.STATISTICS && currentDestination?.route?.startsWith("statistiques") == true) ||
                             (destination == MainDestination.SETTINGS && currentDestination?.route?.startsWith("references/") == true)
                         Column(
                             modifier = Modifier.weight(1f).fillMaxSize()
                                 .clickable {
+                                    if (destination == MainDestination.INVENTORY) {
+                                        Toast.makeText(context, "Bientôt disponible", Toast.LENGTH_SHORT).show()
+                                        return@clickable
+                                    }
                                     navController.navigate(destination.route) {
                                         popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                                         launchSingleTop = true
@@ -189,6 +203,18 @@ fun AppNavigation(container: AppContainer) {
                     navController.navigate("savoirs/article/$articleId")
                 }
             }
+            composable(MainDestination.STATISTICS.route) {
+                val statisticsViewModel: StatisticsViewModel = viewModel(
+                    factory = StatisticsViewModelFactory(container.database.teaDao()),
+                )
+                StatisticsScreen(statisticsViewModel) {
+                    navController.navigate(MainDestination.SETTINGS.route) {
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+            }
             composable(
                 route = ARTICLE_DETAIL_ROUTE,
                 arguments = listOf(navArgument("articleId") { type = NavType.StringType }),
@@ -212,9 +238,18 @@ fun AppNavigation(container: AppContainer) {
                 val settingsViewModel: SettingsViewModel = viewModel(
                     factory = SettingsViewModelFactory(container.preferences),
                 )
-                SettingsScreen(settingsViewModel, container) { kind ->
-                    navController.navigate("references/${kind.name}")
-                }
+                SettingsScreen(
+                    viewModel = settingsViewModel,
+                    container = container,
+                    onOpenReference = { kind -> navController.navigate("references/${kind.name}") },
+                    onOpenStatistics = {
+                        navController.navigate(MainDestination.STATISTICS.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
             }
             composable(
                 route = REFERENCE_LIST_ROUTE,
@@ -348,6 +383,22 @@ private fun BottomNavigationIcon(kind: String, selected: Boolean) {
     Canvas(Modifier.size(20.dp).testTag("bottom-icon-$kind")) {
         val stroke = 1.5.dp.toPx()
         when (kind) {
+            "inventory" -> {
+                val left = size.width * .18f
+                val top = size.height * .2f
+                val width = size.width * .64f
+                val height = size.height * .62f
+                drawRect(color, Offset(left, top), Size(width, height), style = Stroke(stroke))
+                drawLine(color, Offset(left, top + height * .28f), Offset(left + width, top + height * .28f), stroke)
+                drawLine(color, Offset(size.width / 2, top), Offset(size.width / 2, top + height * .28f), stroke)
+            }
+            "statistics" -> {
+                val baseline = size.height * .82f
+                val barWidth = size.width * .16f
+                listOf(.32f, .56f, .84f).forEachIndexed { index, heightFactor ->
+                    drawRect(color, Offset(size.width * (.12f + index * .29f), baseline - size.height * heightFactor), Size(barWidth, size.height * heightFactor), style = Stroke(stroke))
+                }
+            }
             "catalogue" -> {
                 val gap = size.width * .12f
                 val cell = (size.width - gap * 2) / 3
@@ -384,14 +435,14 @@ private fun BottomNavigationIcon(kind: String, selected: Boolean) {
 }
 
 @Composable
-private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit) {
+private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenStatistics: () -> Unit) {
     val settingsNavController = rememberNavController()
     val dictionaryViewModel: SemanticDictionaryViewModel = viewModel(
         factory = SemanticDictionaryViewModelFactory(container.semanticDictionaryRepository, container.database.referenceDao()),
     )
     NavHost(settingsNavController, startDestination = SETTINGS_HOME_ROUTE, modifier = Modifier.fillMaxSize()) {
         composable(SETTINGS_HOME_ROUTE) {
-            SettingsHomeScreen(viewModel, container, onOpenReference) {
+            SettingsHomeScreen(viewModel, container, onOpenReference, onOpenStatistics) {
                 dictionaryViewModel.clearMessage()
                 settingsNavController.navigate(MADJO_DICTIONARY_ROUTE)
             }
@@ -433,7 +484,7 @@ private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer
 }
 
 @Composable
-private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenMadjoDictionary: () -> Unit) {
+private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenStatistics: () -> Unit, onOpenMadjoDictionary: () -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     val preferencesLoaded by viewModel.preferencesLoaded.collectAsStateWithLifecycle()
     val recovery by container.recoveryInspection.collectAsStateWithLifecycle()
@@ -458,6 +509,20 @@ private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppConta
                 if (rowFamilies.size == 1) Spacer(Modifier.weight(1f))
             }
             Spacer(Modifier.height(8.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("Statistiques", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            onClick = onOpenStatistics,
+            modifier = Modifier.fillMaxWidth().height(54.dp).testTag("settings-statistics"),
+            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Ouvrir les statistiques", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+            }
         }
         Spacer(Modifier.height(14.dp))
         Text("Madjo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

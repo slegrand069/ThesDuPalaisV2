@@ -56,6 +56,11 @@ interface TeaDao {
     @Query("SELECT * FROM teas WHERE archivedAtEpochMillis IS NULL ORDER BY name COLLATE NOCASE")
     fun observeActiveCatalog(): Flow<List<TeaWithCatalogData>>
 
+    /** All rows, including archived teas, so historical tastings remain attributable in statistics. */
+    @Transaction
+    @Query("SELECT * FROM teas ORDER BY name COLLATE NOCASE")
+    fun observeAllCatalogForStatistics(): Flow<List<TeaWithCatalogData>>
+
     @Transaction
     @Query("SELECT * FROM teas WHERE id = :teaId AND archivedAtEpochMillis IS NULL LIMIT 1")
     fun observeActiveDetail(teaId: UUID): Flow<TeaWithDetailData?>
