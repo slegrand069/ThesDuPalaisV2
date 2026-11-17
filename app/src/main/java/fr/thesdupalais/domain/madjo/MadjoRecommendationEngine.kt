@@ -50,6 +50,7 @@ data class MadjoRankedTea(
     val score: Int,
     val explanation: String,
     val softAssociationTraces: List<MadjoSoftAssociationTrace> = emptyList(),
+    val explanationEvidence: List<MadjoExplanationEvidence> = emptyList(),
 )
 
 data class MadjoRecommendationOutcome(
@@ -116,7 +117,8 @@ object MadjoRecommendationEngine {
             val ranked = eligible.map { tea ->
                 val preferenceScore = score(tea, softCriteria, criteria, weights)
                 val score = preferenceScore.score + historyScores[tea.id].orEmpty().sum()
-                MadjoRankedTea(tea, score, explain(tea, criteria, preferenceScore.softTraces), preferenceScore.softTraces)
+                val (explanation, evidence) = explain(tea, criteria, preferenceScore.softTraces, weights)
+                MadjoRankedTea(tea, score, explanation, preferenceScore.softTraces, evidence)
             }.sortedWith(compareByDescending<MadjoRankedTea> { it.score }
                 .thenByDescending { it.tea.tasteRating ?: -1.0 }
                 .thenBy { it.tea.name.lowercase(Locale.ROOT) }
@@ -185,9 +187,11 @@ object MadjoRecommendationEngine {
                     val points = (base * weight / 100).coerceAtMost(base - 1).coerceAtLeast(0)
                     if (points == 0) return@mapNotNull null
                     val trace = MadjoSoftAssociationTrace(
+                        dimension = dimension,
                         associationId = associationId,
                         sourceConceptId = sourceId,
                         sourceConceptLabel = sourceLabel,
+                        userExpression = criterion.matchedText,
                         targetConceptId = alternative.conceptId,
                         targetConceptLabel = alternative.label,
                         weightPercent = weight,
@@ -274,7 +278,7 @@ object MadjoRecommendationEngine {
                 "tea" -> normalize(tea.categoryKey.orEmpty()) != "infusion" && normalize(tea.categoryLabel) !in setOf("infusion", "tisane")
                 else -> false
             }
-            "aroma" -> (refMatches(refId, criterion.value, tea.aromas) || criterion.semanticExpansions.any { alternative ->
+            "aroma", "aromatic_profile" -> (refMatches(refId, criterion.value, if (criterion.concept == "aromatic_profile") tea.aromaticProfiles else tea.aromas) || criterion.semanticExpansions.any { alternative ->
                 val refs = if (alternative.businessConcept == "aromatic_profile") tea.aromaticProfiles else tea.aromas
                 (alternative.referenceId != null && refs.any { it.id == alternative.referenceId }) ||
                     refs.any { ref -> alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) } }
@@ -322,55 +326,178 @@ object MadjoRecommendationEngine {
         }
     }
 
-    private fun explain(tea: MadjoTeaProfile, criteria: MadjoRecommendationCriteria, softTraces: List<MadjoSoftAssociationTrace>): String {
-        val matched = mutableListOf<String>()
-        val semanticExplanations = mutableListOf<String>()
-        criteria.criteria.filter { criterion -> criterion.dimension !in setOf(MadjoDimension.TASTE_RATING, MadjoDimension.STOCK) && matches(tea, criterion) }
-            .forEach { criterion ->
-                when (criterion.concept) {
-                    "category", "beverage_type" -> if (tea.categoryLabel !in matched) matched += tea.categoryLabel
-                    "aroma" -> {
-                        val actual = (tea.aromas + tea.aromaticProfiles).firstNotNullOfOrNull { ref ->
-                            val expansion = criterion.semanticExpansions.firstOrNull { alternative ->
-                                alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
-                            }
-                            if (criterion.referenceId == ref.id || expansion != null) ref to expansion else null
-                        }
-                        actual?.first?.label?.let { label ->
-                            if (actual.second?.relation == MadjoRelation.SPECIALIZATION) {
-                                val requested = criterion.displayValue?.lowercase(Locale.FRENCH) ?: "profil aromatique"
-                                semanticExplanations += "Correspond à votre recherche $requested grâce à son arôme $label."
-                            } else matched += label
-                        }
-                    }
-                    "moment" -> tea.moments.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
-                    "country" -> tea.countries.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
-                    "region" -> tea.regions.firstOrNull { criterion.referenceId == null || it.id == criterion.referenceId }?.label?.let(matched::add)
-                }
-            }
-        val sentences = semanticExplanations.toMutableList()
-        softTraces.forEach { trace ->
-            val strength = when (trace.weightPercent) { 25 -> "faible"; 50 -> "moyenne"; 75 -> "forte"; else -> "modérée" }
-            sentences += "Rapprochement souple ($strength) entre « ${trace.sourceConceptLabel} » et « ${trace.targetConceptLabel} », via ${trace.actualCharacteristic} : +${trace.contribution} points de pertinence."
+    private fun explain(
+        tea: MadjoTeaProfile,
+        criteria: MadjoRecommendationCriteria,
+        softTraces: List<MadjoSoftAssociationTrace>,
+        weights: MadjoRankingWeights,
+    ): Pair<String, List<MadjoExplanationEvidence>> {
+        val requested = criteria.criteria.filterNot { criterion ->
+            criterion.dimension == MadjoDimension.TYPE_COLOR && criterion.concept == "beverage_type"
+        }.filter { criterion ->
+            matches(tea, criterion) || criterion.concept == "taste_rating" && criterion.value == "top_rated" && tea.tasteRating != null
         }
-        if (matched.isNotEmpty()) sentences += "Correspond à ta demande de ${matched.distinct().joinToString(", ")}."
-        criteria.criteria.filter { it.dimension == MadjoDimension.TASTING_HISTORY && matches(tea, it) }.forEach { criterion ->
-            sentences += when (criterion.concept) {
-                "tasting_frequency" -> "Dégusté ${tea.tastingCount} fois dans votre historique."
-                "tasting_recency" -> "Parmi les thés dégustés il y a le plus longtemps."
-                else -> ""
+        val evidence = mutableListOf<MadjoExplanationEvidence>()
+        val sentences = mutableListOf<String>()
+
+        requested.forEach { criterion ->
+            characteristic(tea, criterion)?.let { (actual, transformation) ->
+                val provenance = criterion.provenance
+                val expression = provenance?.userExpression ?: criterion.matchedText
+                val label = provenance?.interpretedLabel ?: criterion.displayValue ?: criterion.value
+                val points = criterionContribution(tea, criterion, weights)
+                evidence += MadjoExplanationEvidence(
+                    source = criterion.source,
+                    userExpression = expression,
+                    interpretedConceptId = provenance?.interpretedConceptId,
+                    interpretedLabel = label,
+                    transformation = transformation,
+                    teaCharacteristic = actual,
+                    contribution = points,
+                )
+                sentences += renderRequestedEvidence(criterion.dimension, actual, label, expression, transformation, criterion.source)
             }
+        }
+
+        softTraces.forEach { trace ->
+            evidence += MadjoExplanationEvidence(
+                source = criteria.criteria.firstOrNull { it.softAssociationSourceId == trace.sourceConceptId }?.source,
+                userExpression = trace.userExpression,
+                interpretedConceptId = trace.sourceConceptId,
+                interpretedLabel = trace.sourceConceptLabel,
+                transformation = MadjoCriterionTransformation.SOFT_ASSOCIATION,
+                teaCharacteristic = trace.actualCharacteristic,
+                contribution = trace.contribution,
+                associationId = trace.associationId,
+                weightPercent = trace.weightPercent,
+            )
+            val requestedWord = trace.userExpression?.takeIf(String::isNotBlank) ?: trace.sourceConceptLabel
+            sentences += when (trace.dimension) {
+                MadjoDimension.AROMA -> "Ses notes aromatiques (« ${trace.actualCharacteristic} ») évoquent le profil « $requestedWord » recherché."
+                MadjoDimension.TYPE_COLOR -> "Son type (« ${trace.actualCharacteristic} ») évoque le critère « $requestedWord » recherché."
+                MadjoDimension.ORIGIN -> "Son origine (« ${trace.actualCharacteristic} ») évoque la préférence « $requestedWord »."
+                MadjoDimension.MOMENT -> "Ce thé est associé au moment « ${trace.actualCharacteristic} », proche de « $requestedWord »."
+                else -> "Un rapprochement avec « $requestedWord » a contribué au classement grâce à « ${trace.actualCharacteristic} »."
+            }
+        }
+
+        if (requested.none { it.dimension == MadjoDimension.TYPE_COLOR && it.concept == "category" }) {
+            sentences.add(0, "${tea.categoryLabel}.")
+            evidence += MadjoExplanationEvidence(
+                source = null, userExpression = null, interpretedConceptId = null,
+                interpretedLabel = null, transformation = MadjoCriterionTransformation.DESCRIPTION,
+                teaCharacteristic = tea.categoryLabel,
+            )
         }
         val askedTopRated = criteria.criteria.any { it.concept == "taste_rating" && it.value == "top_rated" }
         if (tea.tasteRating != null && (askedTopRated || criteria.criteria.any { it.dimension == MadjoDimension.TASTE_RATING } || tea.tasteRating >= 8.0)) {
-            sentences += if (askedTopRated) "Apprécié à ${formatRating(tea.tasteRating)}/10." else "Noté ${formatRating(tea.tasteRating)}/10."
+            val rating = "${formatRating(tea.tasteRating)}/10"
+            sentences += "Noté $rating."
+            evidence += MadjoExplanationEvidence(null, null, null, null, MadjoCriterionTransformation.DESCRIPTION, rating)
         }
-        sentences += when (tea.stockState) {
-            MadjoStockState.AVAILABLE -> "Disponible en stock."
-            MadjoStockState.OUT_OF_STOCK -> "Épuisé."
-            MadjoStockState.UNKNOWN -> "Stock inconnu."
+        val stockDescription = when (tea.stockState) {
+            MadjoStockState.AVAILABLE -> "Disponible en stock"
+            MadjoStockState.OUT_OF_STOCK -> "Épuisé"
+            MadjoStockState.UNKNOWN -> "Stock inconnu"
         }
-        return sentences.joinToString(" ")
+        sentences += "$stockDescription."
+        evidence += MadjoExplanationEvidence(null, null, null, null, MadjoCriterionTransformation.DESCRIPTION, stockDescription)
+        criteria.criteria.filter { it.dimension == MadjoDimension.TASTING_HISTORY && matches(tea, it) }.forEach { criterion ->
+            when (criterion.concept) {
+                "tasting_frequency" -> sentences += "Dégusté ${tea.tastingCount} fois selon ton historique."
+                "tasting_recency" -> sentences += "C’est l’un des thés que tu as dégustés il y a le plus longtemps."
+            }
+        }
+        if (sentences.isEmpty()) sentences += "Voici une suggestion pour toi."
+        return sentences.joinToString(" ") to evidence
+    }
+
+    private fun characteristic(tea: MadjoTeaProfile, criterion: MadjoCriterion): Pair<String, MadjoCriterionTransformation>? {
+        val preferredTransformation = criterion.provenance?.transformation ?: MadjoCriterionTransformation.DIRECT
+        fun transformation(ref: MadjoReference): MadjoCriterionTransformation {
+            val expanded = criterion.semanticExpansions.firstOrNull { alternative ->
+                alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+            }
+            return if (expanded?.relation == MadjoRelation.SPECIALIZATION) MadjoCriterionTransformation.SPECIALIZATION else preferredTransformation
+        }
+        return when (criterion.dimension) {
+            MadjoDimension.TYPE_COLOR -> if (criterion.concept == "category") {
+                tea.categoryLabel to (criterion.semanticExpansions.firstOrNull { alternative ->
+                    alternative.referenceId == tea.categoryId || alternative.businessValues.any { valueMatches(it, tea.categoryKey, tea.categoryLabel) }
+                }?.takeIf { it.relation == MadjoRelation.SPECIALIZATION }?.let { MadjoCriterionTransformation.SPECIALIZATION } ?: preferredTransformation)
+            } else if (criterion.concept == "beverage_type") {
+                (if (isInfusion(tea)) "Infusion" else "Thé") to preferredTransformation
+            } else null
+            MadjoDimension.AROMA -> (tea.aromas + tea.aromaticProfiles).firstOrNull { ref ->
+                criterion.referenceId == ref.id || criterion.semanticExpansions.any { alternative ->
+                    alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+                }
+            }?.let { it.label to transformation(it) }
+            MadjoDimension.ORIGIN -> (tea.countries + tea.regions).firstOrNull { ref ->
+                criterion.referenceId == ref.id || criterion.semanticExpansions.any { alternative ->
+                    alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+                } || criterion.referenceId == null && valueMatches(criterion.value, ref.semanticKey, ref.label)
+            }?.let { it.label to transformation(it) }
+            MadjoDimension.MOMENT -> tea.moments.firstOrNull { ref ->
+                criterion.referenceId == ref.id || criterion.semanticExpansions.any { alternative ->
+                    alternative.referenceId == ref.id || alternative.businessValues.any { valueMatches(it, ref.semanticKey, ref.label) }
+                } || criterion.referenceId == null && valueMatches(criterion.value, ref.semanticKey, ref.label)
+            }?.let { it.label to transformation(it) }
+            MadjoDimension.TASTE_RATING -> tea.tasteRating?.let { "${formatRating(it)}/10" to preferredTransformation }
+            MadjoDimension.STOCK -> if (matches(tea, criterion)) {
+                when (tea.stockState) {
+                    MadjoStockState.AVAILABLE -> "Disponible en stock"
+                    MadjoStockState.OUT_OF_STOCK -> "Épuisé"
+                    MadjoStockState.UNKNOWN -> "Stock inconnu"
+                }.let { it to preferredTransformation }
+            } else null
+            MadjoDimension.TASTING_HISTORY -> when (criterion.concept) {
+                "tasting_frequency" -> if (tea.tastingCount > 0) "${tea.tastingCount} dégustations" to preferredTransformation else null
+                "tasting_recency" -> tea.lastTastedAtEpochMillis?.let { "dernière dégustation enregistrée" to preferredTransformation }
+                else -> null
+            }
+        }
+    }
+
+    private fun renderRequestedEvidence(
+        dimension: MadjoDimension,
+        actual: String,
+        interpreted: String,
+        expression: String?,
+        transformation: MadjoCriterionTransformation,
+        source: MadjoCriterionSource,
+    ): String {
+        val requestedPhrase = expression?.takeIf(String::isNotBlank) ?: interpreted
+        val requested = when (transformation) {
+            MadjoCriterionTransformation.SPECIALIZATION -> when (dimension) {
+                MadjoDimension.AROMA -> "Ses notes de « $actual » correspondent à ta recherche de « $interpreted »."
+                MadjoDimension.TYPE_COLOR -> "Le type « $actual » correspond à ta recherche de « $interpreted » par spécialisation."
+                else -> "« $actual » correspond à ta recherche de « $interpreted » par spécialisation."
+            }
+            MadjoCriterionTransformation.SYNONYM -> when (dimension) {
+                MadjoDimension.AROMA -> "Son profil « $actual » correspond à ta recherche formulée « $requestedPhrase »."
+                else -> "« $actual » correspond à ta recherche formulée « $requestedPhrase »."
+            }
+            else -> when (dimension) {
+                MadjoDimension.TYPE_COLOR -> if (source == MadjoCriterionSource.USER_ANSWER) "Tu as choisi « $actual »." else "« $actual », comme tu le souhaites."
+                MadjoDimension.AROMA -> "Ses notes aromatiques (« $actual ») correspondent à ta recherche de « $requestedPhrase »."
+                MadjoDimension.ORIGIN -> "Son origine (« $actual ») correspond à ta recherche."
+                MadjoDimension.MOMENT -> "Le moment (« $actual ») correspond à ta recherche."
+                MadjoDimension.TASTE_RATING -> "Note gustative : $actual."
+                MadjoDimension.STOCK -> "$actual."
+                MadjoDimension.TASTING_HISTORY -> "Dans ton historique : $actual."
+            }
+        }
+        return requested
+    }
+
+    private fun criterionContribution(tea: MadjoTeaProfile, criterion: MadjoCriterion, weights: MadjoRankingWeights): Int? {
+        if (criterion.kind != MadjoCriterionKind.PREFERENCE) return null
+        if (criterion.dimension == MadjoDimension.TASTING_HISTORY) return null
+        if (criterion.concept == "taste_rating" && criterion.value == "top_rated") {
+            return ((tea.tasteRating ?: 0.0).coerceIn(0.0, 10.0) * weights.requestedRating).toInt() / 10
+        }
+        return dimensionPreferenceWeight(criterion.dimension, weights)
     }
 
     private fun formatRating(value: Double): String = if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()

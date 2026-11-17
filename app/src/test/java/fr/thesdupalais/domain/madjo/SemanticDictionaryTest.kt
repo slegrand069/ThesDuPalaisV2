@@ -10,6 +10,7 @@ import fr.thesdupalais.domain.semantics.SemanticDictionarySnapshot
 import fr.thesdupalais.domain.semantics.SemanticRelation
 import fr.thesdupalais.domain.semantics.SemanticRelationType
 import fr.thesdupalais.domain.semantics.SemanticDictionaryValidator
+import fr.thesdupalais.domain.semantics.SemanticAssociation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -112,17 +113,17 @@ class SemanticDictionaryTest {
     @Test fun explicitSemanticConstraintsRemainStrictAcrossCombinedDimensions() {
         val green = MadjoReference("green", "GREEN", "Thé vert")
         val berries = MadjoReference("berries", "BERRIES", "Fruits des bois")
-        val citrus = MadjoReference("citrus", "CITRUS", "Agrumes")
+        val floral = MadjoReference("floral", "FLORAL", "Floral")
         val vietnam = MadjoReference("vietnam", "VIETNAM", "Vietnam")
-        val enriched = MadjoVocabulary(categories = listOf(green), aromas = listOf(berries, citrus), countries = listOf(vietnam), semanticDictionary = dictionary)
+        val enriched = MadjoVocabulary(categories = listOf(green), aromas = listOf(berries, floral), countries = listOf(vietnam), semanticDictionary = dictionary)
         val criteria = MadjoConversationEngine.start("Madjo, un thé vert fruité du Vietnam", enriched).criteria
         assertTrue(criteria.absoluteConstraints.any { it.dimension == MadjoDimension.TYPE_COLOR })
         assertTrue(criteria.absoluteConstraints.any { it.dimension == MadjoDimension.AROMA })
         assertTrue(criteria.absoluteConstraints.any { it.dimension == MadjoDimension.ORIGIN })
         val correct = MadjoTeaProfile("correct", "Vert Vietnam baies", green.id, "GREEN", green.label,
             countries = listOf(vietnam), aromas = listOf(berries))
-        val incorrect = MadjoTeaProfile("wrong", "Vert Vietnam agrumes", green.id, "GREEN", green.label,
-            countries = listOf(vietnam), aromas = listOf(citrus))
+        val incorrect = MadjoTeaProfile("wrong", "Vert Vietnam floral", green.id, "GREEN", green.label,
+            countries = listOf(vietnam), aromas = listOf(floral))
         assertEquals(listOf("correct"), MadjoRecommendationEngine.recommend(listOf(correct, incorrect), criteria).recommendations.map { it.tea.id })
     }
 
@@ -155,7 +156,94 @@ class SemanticDictionaryTest {
             id = "berry-tea", name = "Thé aux fruits des bois", categoryId = "green", categoryKey = "GREEN", categoryLabel = "Thé vert",
             aromas = listOf(berries),
         )
+        val outcome = MadjoRecommendationEngine.recommend(listOf(tea), state.criteria)
+        assertTrue("${state.criteria} -> $outcome", outcome.recommendations.isNotEmpty())
+        val recommendation = outcome.recommendations.single()
+        assertTrue(recommendation.explanation.contains("Ses notes de « Fruits des bois » correspondent à ta recherche de « Fruité »."))
+        assertEquals(MadjoCriterionTransformation.SPECIALIZATION, recommendation.explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SPECIALIZATION }.transformation)
+        assertEquals("fruité", recommendation.explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SPECIALIZATION }.userExpression)
+    }
+
+    @Test fun softAssociationDoesNotReplaceASeparatelyRequestedTargetConcept() {
+        val gourmand = SemanticConcept("user-gourmand", SemanticDomain.AROMA, "Gourmand")
+        val vanilla = SemanticConcept("user-vanilla", SemanticDomain.AROMA, "Vanillé", businessDimension = "AROMA", businessConcept = "aroma", businessValue = "VANILLA")
+        val enriched = dictionary.copy(
+            concepts = dictionary.concepts + listOf(gourmand, vanilla),
+            expressions = dictionary.expressions + listOf(
+                SemanticExpression("gourmand-primary", gourmand.id, "Gourmand", "gourmand", true),
+                SemanticExpression("vanilla-primary", vanilla.id, "Vanillé", "vanille", true),
+            ),
+            associations = listOf(SemanticAssociation("gourmand-vanilla", gourmand.id, vanilla.id, 75)),
+        )
+        val vocabulary = MadjoVocabulary(
+            aromas = listOf(MadjoReference("vanilla-ref", "VANILLA", "Vanillé")),
+            semanticDictionary = enriched,
+        )
+        val criteria = MadjoConversationEngine.start("Madjo, je veux un thé gourmand et vanillé", vocabulary).criteria.criteria
+        val gourmandCriterion = criteria.single { it.softAssociationSourceId == gourmand.id }
+        val vanillaCriterion = criteria.single { it.provenance?.interpretedConceptId == vanilla.id }
+
+        assertEquals("gourmand", gourmandCriterion.provenance?.userExpression)
+        assertEquals("vanillé", vanillaCriterion.provenance?.userExpression)
+        assertEquals(MadjoCriterionTransformation.DIRECT, vanillaCriterion.provenance?.transformation)
+    }
+
+    @Test fun recognizedSynonymIsKeptSeparateFromItsCanonicalConcept() {
+        val floralProfileId = BuiltInSemanticDictionary.conceptId(SemanticDomain.AROMATIC_PROFILE, "floral-profile")
+        val synonymDictionary = dictionary.copy(expressions = dictionary.expressions + SemanticExpression(
+            "floral-fleuri-test", floralProfileId, "fleuri", "fleuri", false,
+        ))
+        val profile = MadjoReference("floral-profile-ref", "FLORAL", "Floral")
+        val vocabulary = MadjoVocabulary(aromaticProfiles = listOf(profile), semanticDictionary = synonymDictionary)
+        val state = MadjoConversationEngine.start("Madjo, un thé FLEURI!", vocabulary)
+        assertTrue(state.criteria.toString(), state.criteria.criteria.isNotEmpty())
+        val tea = MadjoTeaProfile("floral-tea", "Thé floral", "green", "GREEN", "Thé vert", aromaticProfiles = listOf(profile))
         val recommendation = MadjoRecommendationEngine.recommend(listOf(tea), state.criteria).recommendations.single()
-        assertTrue(recommendation.explanation.contains("Correspond à votre recherche fruité grâce à son arôme Fruits des bois."))
+        val provenance = recommendation.explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SYNONYM }
+
+        assertEquals("FLEURI", provenance.userExpression)
+        assertEquals("Profil floral", provenance.interpretedLabel)
+        assertEquals("Floral", provenance.teaCharacteristic)
+        assertTrue(recommendation.explanation.contains("recherche formulée « FLEURI »"))
+        assertFalse(recommendation.explanation.contains("tu as demandé Floral", ignoreCase = true))
+    }
+
+    @Test fun citrusSpecializationPreservesTheRequestedGeneralConcept() {
+        val citrusId = BuiltInSemanticDictionary.conceptId(SemanticDomain.AROMA, "citrus")
+        val lemon = SemanticConcept("user-lemon", SemanticDomain.AROMA, "Citron", businessDimension = "AROMA", businessConcept = "aroma", businessValue = "LEMON")
+        val enriched = dictionary.copy(
+            concepts = dictionary.concepts + lemon,
+            expressions = dictionary.expressions + SemanticExpression("lemon-primary", lemon.id, "Citron", "citron", true),
+            relations = dictionary.relations + SemanticRelation("citrus-lemon", citrusId, lemon.id, SemanticRelationType.SPECIALIZATION),
+        )
+        val reference = MadjoReference("lemon-ref", "LEMON", "Citron")
+        val vocabulary = MadjoVocabulary(aromas = listOf(reference), semanticDictionary = enriched)
+        val state = MadjoConversationEngine.start("Madjo, un thé aux agrumes", vocabulary)
+        val tea = MadjoTeaProfile("lemon-tea", "Thé citronné", "green", "GREEN", "Thé vert", aromas = listOf(reference))
+        val result = MadjoRecommendationEngine.recommend(listOf(tea), state.criteria).recommendations.single()
+        val trace = result.explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SPECIALIZATION }
+
+        assertEquals("agrumes", trace.userExpression)
+        assertEquals("Agrumes", trace.interpretedLabel)
+        assertEquals("Citron", trace.teaCharacteristic)
+        assertTrue(result.explanation.contains("recherche de « Agrumes »"))
+        assertFalse(result.explanation.contains("tu as demandé du citron", ignoreCase = true))
+    }
+
+    @Test fun disabledAssociationProducesNoAssociationEvidence() {
+        val source = SemanticConcept("gourmand-disabled-test", SemanticDomain.AROMA, "Gourmand")
+        val target = SemanticConcept("vanilla-disabled-test", SemanticDomain.AROMA, "Vanillé", businessDimension = "AROMA", businessConcept = "aroma", businessValue = "VANILLA")
+        val enriched = dictionary.copy(
+            concepts = dictionary.concepts + listOf(source, target),
+            expressions = dictionary.expressions + listOf(
+                SemanticExpression("gourmand-disabled-expression", source.id, "Gourmand", "gourmand", true),
+                SemanticExpression("vanilla-disabled-expression", target.id, "Vanillé", "vanille", true),
+            ),
+            associations = listOf(SemanticAssociation("disabled-link", source.id, target.id, 75, active = false)),
+        )
+        val vanilla = MadjoReference("vanilla-disabled-ref", "VANILLA", "Vanillé")
+        val state = MadjoConversationEngine.start("Madjo, je voudrais un thé gourmand", MadjoVocabulary(aromas = listOf(vanilla), semanticDictionary = enriched))
+        assertTrue(state.criteria.criteria.none { it.provenance?.interpretedConceptId == source.id })
+        assertTrue(state.criteria.criteria.none { it.softAssociations.isNotEmpty() })
     }
 }

@@ -8,6 +8,7 @@ import fr.thesdupalais.domain.semantics.SemanticMatch
 import fr.thesdupalais.domain.semantics.SemanticAmbiguity
 import fr.thesdupalais.domain.semantics.SemanticDomain
 import fr.thesdupalais.domain.semantics.SemanticRelationType
+import fr.thesdupalais.domain.semantics.SemanticMatchType
 
 enum class MadjoSpeaker { MADJO, USER }
 data class MadjoMessage(val id: Int, val speaker: MadjoSpeaker, val text: String)
@@ -17,7 +18,30 @@ enum class MadjoQuestionId { TYPE_COLOR, AROMA, MOMENT, ORIGIN, TASTE_RATING, ST
 enum class MadjoCriterionKind { ABSOLUTE_CONSTRAINT, PREFERENCE }
 enum class MadjoCriterionSource { INITIAL_REQUEST, USER_ANSWER }
 enum class MadjoRelation { DIRECT_SYNONYM, SPECIALIZATION, SEMANTIC_ASSOCIATION }
+enum class MadjoCriterionTransformation { DIRECT, SYNONYM, SPECIALIZATION, SOFT_ASSOCIATION, DESCRIPTION }
 enum class MadjoAmbiguityReason { UNKNOWN_REFERENCE_VALUE, CONFLICTING_VALUES, AMBIGUOUS_SEMANTIC_CONCEPT, SOFT_ASSOCIATION_NOT_CONSTRAINT }
+
+/** Provenance preserves the user's wording and the resolver's interpretation separately. */
+data class MadjoCriterionProvenance(
+    val source: MadjoCriterionSource,
+    val userExpression: String?,
+    val interpretedConceptId: String?,
+    val interpretedLabel: String?,
+    val transformation: MadjoCriterionTransformation,
+)
+
+/** A recommendation explanation can be audited against the request, transformation and tea data. */
+data class MadjoExplanationEvidence(
+    val source: MadjoCriterionSource?,
+    val userExpression: String?,
+    val interpretedConceptId: String?,
+    val interpretedLabel: String?,
+    val transformation: MadjoCriterionTransformation,
+    val teaCharacteristic: String,
+    val contribution: Int? = null,
+    val associationId: String? = null,
+    val weightPercent: Int? = null,
+)
 
 data class MadjoReference(
     val id: String,
@@ -72,6 +96,7 @@ data class MadjoCriterion(
     val semanticExpansions: List<MadjoSemanticAlternative> = emptyList(),
     val softAssociations: List<MadjoSemanticAlternative> = emptyList(),
     val softAssociationSourceId: String? = null,
+    val provenance: MadjoCriterionProvenance? = null,
 )
 
 data class MadjoAmbiguity(
@@ -87,9 +112,11 @@ data class MadjoAmbiguity(
 )
 
 data class MadjoSoftAssociationTrace(
+    val dimension: MadjoDimension,
     val associationId: String,
     val sourceConceptId: String,
     val sourceConceptLabel: String,
+    val userExpression: String?,
     val targetConceptId: String,
     val targetConceptLabel: String,
     val weightPercent: Int,
@@ -219,14 +246,20 @@ object MadjoConversationEngine {
         val question = state.currentQuestion ?: return state
         if (state.offTopic || state.recommendationsRequested || question.id != questionId || rawText.isBlank()) return state
         val trimmed = rawText.trim()
-        val isAny = normalize(trimmed) in setOf("peu importe", "n importe", "comme tu veux", "aucune preference", "indifferent", "indifferente")
+        val isAny = isAnyAnswer(trimmed)
         val previous = state.answers.lastOrNull()
         if (previous?.questionId == questionId && previous.rawText.trim() == trimmed &&
             state.messages.lastOrNull()?.speaker == MadjoSpeaker.MADJO) return state
 
         val extraction = extract(trimmed, state.vocabulary, MadjoCriterionSource.USER_ANSWER)
         val selected = question.options.firstOrNull { normalize(it.label) == normalize(trimmed) || normalize(it.value) == normalize(trimmed) }
-        val selectedCriteria = selected?.criteria.orEmpty().map { it.copy(source = MadjoCriterionSource.USER_ANSWER, matchedText = trimmed) }
+        val selectedCriteria = selected?.criteria.orEmpty().map { item ->
+            item.copy(
+                source = MadjoCriterionSource.USER_ANSWER,
+                matchedText = trimmed,
+                provenance = item.provenance?.copy(source = MadjoCriterionSource.USER_ANSWER, userExpression = trimmed),
+            )
+        }
         val priorAmbiguity = state.criteria.ambiguities.firstOrNull { it.dimension == question.dimension }
         val responseCriteria = extraction.criteria.map { item ->
             val inheritedKind = priorAmbiguity?.intendedKind
@@ -237,7 +270,7 @@ object MadjoConversationEngine {
             priorAmbiguity?.intendedKind?.let { item.copy(kind = it) } ?: item
         }
         val added = mergeDistinct(responseCriteria + inheritedSelectedCriteria)
-        val resolved = selected != null || (isAny && question.id != MadjoQuestionId.CLARIFICATION) || added.any { question.dimension == it.dimension } ||
+        val resolved = selected != null || isAny || added.any { question.dimension == it.dimension } ||
             (question.id == MadjoQuestionId.CLARIFICATION && added.isNotEmpty())
         val userMessage = MadjoMessage(state.messages.size, MadjoSpeaker.USER, trimmed)
         val withUser = state.copy(messages = state.messages + userMessage)
@@ -260,14 +293,15 @@ object MadjoConversationEngine {
         val replacesDimension = question.dimension.takeIf { resolved }
         val updatedCriteria = mergeAnswerCriteria(state.criteria.criteria, added, replacesDimension, trimmed)
         val remainingAmbiguities = state.criteria.ambiguities.filterNot { ambiguity ->
-            added.any { it.dimension == ambiguity.dimension && ambiguityResolvedBy(ambiguity, it.concept) }
+            (isAny && question.dimension == ambiguity.dimension) ||
+                added.any { it.dimension == ambiguity.dimension && ambiguityResolvedBy(ambiguity, it.concept) }
         }
-        val nextQuestionAnswered = selected != null || (isAny && question.id != MadjoQuestionId.CLARIFICATION) || added.any { it.dimension == question.dimension }
+        val nextQuestionAnswered = selected != null || isAny || added.any { it.dimension == question.dimension }
         val answerValue = selected?.value ?: if (isAny && added.isEmpty()) "any:${question.dimension?.name.orEmpty()}" else added.joinToString { "${it.concept}:${it.value}" }
         val answer = MadjoRecordedAnswer(questionId, trimmed, answerValue, nextQuestionAnswered)
         val next = withUser.copy(
             criteria = MadjoRecommendationCriteria(updatedCriteria, mergeAmbiguities(remainingAmbiguities, extraction.ambiguities)),
-            recognizedFacts = state.recognizedFacts + added.map { it.concept },
+            recognizedFacts = updatedCriteria.map { it.concept }.toSet(),
             answers = state.answers + answer,
         )
         if (!nextQuestionAnswered) {
@@ -343,15 +377,16 @@ object MadjoConversationEngine {
 
     private fun isReady(state: MadjoConversationState): Boolean {
         if (state.vocabulary.usefulQuestionIds?.isEmpty() == true) return true
-        if (state.criteria.dimensions.size >= 2) return true
+        val meaningfulDimensions = state.criteria.criteria.filterNot(::isGenericTeaTypeCriterion).map { it.dimension }.toSet()
+        if (meaningfulDimensions.size >= 2) return true
         val acceptedOptionalAnswers = state.answers.count { it.resolvedQuestion && it.interpretedValue?.startsWith("any:") == true }
         val acceptedSpecificAnswers = state.answers.any { it.resolvedQuestion && it.interpretedValue?.startsWith("any:") != true }
-        return acceptedOptionalAnswers >= 2 || acceptedSpecificAnswers
+        return acceptedOptionalAnswers >= 2 || acceptedSpecificAnswers || acceptedOptionalAnswers >= 1 && meaningfulDimensions.isNotEmpty()
     }
 
     private fun nextQuestion(state: MadjoConversationState): MadjoQuestion? {
         state.criteria.ambiguities.firstOrNull()?.let { return clarificationQuestion(it, state.vocabulary) }
-        val known = state.criteria.dimensions
+        val known = state.criteria.criteria.filterNot(::isGenericTeaTypeCriterion).map { it.dimension }.toSet()
         val asked = state.questionsAsked.toSet()
         val baseOrder = questionOrder(state.criteria.criteria, state.analysisText)
         val order = state.vocabulary.candidateOptionIds?.let { evidence ->
@@ -369,7 +404,7 @@ object MadjoConversationEngine {
     }
 
     private fun questionOrder(criteria: List<MadjoCriterion>, request: String): List<MadjoQuestionId> {
-        val dimensions = criteria.map { it.dimension }.toSet()
+        val dimensions = criteria.filterNot(::isGenericTeaTypeCriterion).map { it.dimension }.toSet()
         if (dimensions.isEmpty()) return listOf(MadjoQuestionId.TYPE_COLOR, MadjoQuestionId.AROMA, MadjoQuestionId.ORIGIN, MadjoQuestionId.MOMENT, MadjoQuestionId.STOCK, MadjoQuestionId.TASTE_RATING)
         return when {
             MadjoDimension.TYPE_COLOR in dimensions -> listOf(MadjoQuestionId.AROMA, MadjoQuestionId.ORIGIN, MadjoQuestionId.MOMENT, MadjoQuestionId.STOCK, MadjoQuestionId.TASTE_RATING, MadjoQuestionId.TYPE_COLOR)
@@ -390,6 +425,9 @@ object MadjoConversationEngine {
         MadjoQuestionId.STOCK -> MadjoDimension.STOCK
         MadjoQuestionId.CLARIFICATION -> null
     }
+
+    private fun isGenericTeaTypeCriterion(criterion: MadjoCriterion): Boolean =
+        criterion.dimension == MadjoDimension.TYPE_COLOR && criterion.concept == "beverage_type" && criterion.value == "tea"
 
     private fun questionFor(id: MadjoQuestionId, vocabulary: MadjoVocabulary): MadjoQuestion? = when (id) {
         MadjoQuestionId.TYPE_COLOR -> typeQuestion(vocabulary)
@@ -535,7 +573,10 @@ object MadjoConversationEngine {
         val ambiguities = mutableListOf<MadjoAmbiguity>()
         val known = mutableSetOf<String>()
         fun add(dimension: MadjoDimension, concept: String, value: String, reference: MadjoReference? = null, matched: String, kind: MadjoCriterionKind = nature(dimension, normalized, matched, source)) {
-            output += criterion(dimension, concept, value, kind, reference, reference?.label ?: value, matched, source)
+            output += criterion(
+                dimension, concept, value, kind, reference, reference?.label ?: value, matched, source,
+                userExpression = MadjoSemanticResolver.userExpression(text, matched),
+            )
             known += concept
         }
 
@@ -562,13 +603,30 @@ object MadjoConversationEngine {
             ambiguities += MadjoAmbiguity(MadjoDimension.TYPE_COLOR, term, MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE, "category", nature(MadjoDimension.TYPE_COLOR, normalized, term, source), source)
         }
 
-        val aromaMatches = vocabulary.aromas.flatMap { ref -> aromaTerms(ref).filter { containsPhrase(normalized, normalize(it)) }.map { ref to it } }
+        val aromaMatches = vocabulary.aromas.flatMap { ref ->
+            aromaTerms(ref).filter { term ->
+                containsPhrase(normalized, normalize(term)) && semanticResolution.matches.none { match ->
+                    match.relationType == null && match.concept.domain in setOf(SemanticDomain.AROMA, SemanticDomain.AROMATIC_PROFILE) &&
+                        normalize(match.userExpression.orEmpty()) == normalize(term)
+                }
+            }.map { ref to it }
+        }
         aromaMatches.distinctBy { it.first.id }.forEach { (ref, matched) -> add(MadjoDimension.AROMA, "aroma", criterionValue(ref), ref, matched) }
         aromaTermsByConcept.forEach { (concept, terms) ->
             terms.firstOrNull { containsPhrase(normalized, normalize(it)) }?.let { matched ->
                 val present = vocabulary.aromas.firstOrNull { referenceMatchesConcept(it, concept) }
-                if (present == null) ambiguities += MadjoAmbiguity(MadjoDimension.AROMA, matched, MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE, "aroma:$concept", nature(MadjoDimension.AROMA, normalized, matched, source), source)
-                else if (aromaMatches.none { it.first.id == present.id }) add(MadjoDimension.AROMA, "aroma", criterionValue(present), present, matched)
+                val presentProfile = vocabulary.aromaticProfiles.firstOrNull { referenceMatchesConcept(it, concept) }
+                val semanticallyResolved = semanticResolution.matches.any { match ->
+                    match.relationType == null && match.concept.businessDimension == "AROMA" &&
+                        (match.concept.businessValue?.equals(concept.uppercase(Locale.ROOT)) == true || normalize(match.concept.label).contains(normalize(matched)))
+                }
+                when {
+                    semanticallyResolved -> Unit
+                    present != null && aromaMatches.none { it.first.id == present.id } -> add(MadjoDimension.AROMA, "aroma", criterionValue(present), present, matched)
+                    present != null -> Unit
+                    presentProfile != null -> add(MadjoDimension.AROMA, "aromatic_profile", criterionValue(presentProfile), presentProfile, matched)
+                    else -> ambiguities += MadjoAmbiguity(MadjoDimension.AROMA, matched, MadjoAmbiguityReason.UNKNOWN_REFERENCE_VALUE, "aroma:$concept", nature(MadjoDimension.AROMA, normalized, matched, source), source)
+                }
             }
         }
 
@@ -688,9 +746,13 @@ object MadjoConversationEngine {
                     kind = MadjoCriterionKind.PREFERENCE,
                     source = source,
                     displayValue = root.concept.label,
-                    matchedText = root.matchedExpression,
+                matchedText = root.userExpression ?: root.matchedExpression,
                     softAssociations = softAlternatives,
                     softAssociationSourceId = root.concept.id,
+                    provenance = MadjoCriterionProvenance(
+                        source, root.userExpression ?: root.matchedExpression, root.concept.id, root.concept.label,
+                        if (root.matchType == SemanticMatchType.SYNONYM) MadjoCriterionTransformation.SYNONYM else MadjoCriterionTransformation.DIRECT,
+                    ),
                 )
             }
             val dimension = semanticDimension(root.concept.domain, mapped.concept) ?: return@mapNotNull null
@@ -705,10 +767,14 @@ object MadjoConversationEngine {
                 kind = kind,
                 source = source,
                 displayValue = root.concept.label,
-                matchedText = root.matchedExpression,
+                    matchedText = root.userExpression ?: root.matchedExpression,
                 semanticExpansions = alternatives,
                 softAssociations = if (kind == MadjoCriterionKind.PREFERENCE) softAlternatives else emptyList(),
                 softAssociationSourceId = root.concept.id.takeIf { kind == MadjoCriterionKind.PREFERENCE && softAlternatives.isNotEmpty() },
+                provenance = MadjoCriterionProvenance(
+                    source, root.userExpression ?: root.matchedExpression, root.concept.id, root.concept.label,
+                    if (root.matchType == SemanticMatchType.SYNONYM) MadjoCriterionTransformation.SYNONYM else MadjoCriterionTransformation.DIRECT,
+                ),
             )
         }.distinctBy { listOf(it.dimension.name, it.concept, it.value, it.kind.name, it.matchedText.orEmpty()) }
         return criteria to associationAmbiguities
@@ -776,24 +842,25 @@ object MadjoConversationEngine {
         response: String,
     ): List<MadjoCriterion> {
         val merged = current.toMutableList()
+        val answeredAny = isAnyAnswer(response)
         if (answeredDimension != null) {
             val conceptsToReplace = when (answeredDimension) {
                 MadjoDimension.TYPE_COLOR -> buildSet {
-                    if (incoming.any { it.concept == "category" }) add("category")
+                    if (incoming.any { it.concept == "category" } || answeredAny) add("category")
                     val incomingType = incoming.firstOrNull { it.concept == "beverage_type" }?.value
                     if (incomingType != null && current.any { it.concept == "beverage_type" && it.value != incomingType }) add("beverage_type")
                 }
-                MadjoDimension.AROMA -> setOf("aroma")
+                MadjoDimension.AROMA -> setOf("aroma", "aromatic_profile")
                 MadjoDimension.MOMENT -> setOf("moment")
                 MadjoDimension.ORIGIN -> buildSet {
-                    if (incoming.any { it.concept == "country" }) add("country")
-                    if (incoming.any { it.concept == "region" }) add("region")
+                    if (incoming.any { it.concept == "country" } || answeredAny) add("country")
+                    if (incoming.any { it.concept == "region" } || answeredAny) add("region")
                 }
                 MadjoDimension.TASTE_RATING -> setOf("taste_rating")
                 MadjoDimension.STOCK -> setOf("stock")
                 MadjoDimension.TASTING_HISTORY -> setOf("tasting_frequency", "tasting_recency")
             }
-            if (incoming.any { it.dimension == answeredDimension }) merged.removeAll { it.concept in conceptsToReplace }
+            if (incoming.any { it.dimension == answeredDimension } || answeredAny) merged.removeAll { it.concept in conceptsToReplace }
         }
         val correction = correctionMarkers.any { containsPhrase(normalize(response), it) }
         if (correction) {
@@ -815,7 +882,16 @@ object MadjoConversationEngine {
         display: String? = null,
         matched: String? = null,
         source: MadjoCriterionSource = MadjoCriterionSource.INITIAL_REQUEST,
-    ) = MadjoCriterion(dimension, concept, value, kind, source, ref?.id, display, matched)
+        userExpression: String? = null,
+    ): MadjoCriterion {
+        val transformation = if (ref != null && matched != null && normalize(matched) != normalize(ref.label)) {
+            MadjoCriterionTransformation.SYNONYM
+        } else MadjoCriterionTransformation.DIRECT
+        return MadjoCriterion(
+            dimension, concept, value, kind, source, ref?.id, display, matched,
+            provenance = MadjoCriterionProvenance(source, userExpression ?: matched, ref?.id, display ?: ref?.label ?: value, transformation),
+        )
+    }
 
     private fun refOption(concept: String, dimension: MadjoDimension, ref: MadjoReference) = MadjoAnswerOption(
         "$concept:${ref.id}", ref.label,
@@ -955,6 +1031,11 @@ object MadjoConversationEngine {
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
         .replace(Regex("\\s+"), " ")
+
+    private fun isAnyAnswer(value: String): Boolean = normalize(value) in setOf(
+        "peu importe", "n importe", "n importe lequel", "n importe laquelle",
+        "comme tu veux", "aucune preference", "indifferent", "indifferente",
+    )
 
     private val categoryAliases = mapOf(
         "GREEN" to setOf("vert", "verte", "green tea"),

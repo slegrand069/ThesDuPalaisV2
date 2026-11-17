@@ -49,7 +49,7 @@ class MadjoRecommendationEngineTest {
         )
         val soft = MadjoCriterion(
             MadjoDimension.AROMA, "aroma", "GOURMAND", MadjoCriterionKind.PREFERENCE,
-            MadjoCriterionSource.INITIAL_REQUEST, displayValue = "Gourmand",
+            MadjoCriterionSource.INITIAL_REQUEST, displayValue = "Gourmand", matchedText = "Gourmand",
             softAssociations = listOf(softAlternative), softAssociationSourceId = "gourmand-concept",
         )
         val ranked = MadjoRecommendationEngine.recommend(
@@ -58,7 +58,12 @@ class MadjoRecommendationEngineTest {
         ).recommendations
         assertEquals("linked", ranked.first().tea.id)
         assertEquals(15, ranked.first().softAssociationTraces.single().contribution)
-        assertTrue(ranked.first().explanation.contains("Rapprochement souple"))
+        assertTrue(ranked.first().explanation.contains("Ses notes aromatiques (« Vanillé ») évoquent le profil « Gourmand » recherché."))
+        val evidence = ranked.first().explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SOFT_ASSOCIATION }
+        assertEquals("Gourmand", evidence.userExpression)
+        assertEquals("Vanillé", evidence.teaCharacteristic)
+        assertEquals(15, evidence.contribution)
+        assertFalse(ranked.first().explanation.contains("tu as demandé de la vanille", ignoreCase = true))
 
         val hard = soft.copy(kind = MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
         val strictResults = MadjoRecommendationEngine.recommend(listOf(plain, linked), MadjoRecommendationCriteria(listOf(hard)))
@@ -89,6 +94,46 @@ class MadjoRecommendationEngineTest {
         assertEquals("direct", result.first().tea.id)
         assertEquals(1, result.single { it.tea.id == "linked" }.softAssociationTraces.size)
         assertEquals(15, result.single { it.tea.id == "linked" }.softAssociationTraces.single().contribution)
+    }
+
+    @Test fun descriptiveColorIsNeutralWhenOnlyAnAromaWasRequested() {
+        val corsé = MadjoReference("corsé", "CORSE", "Corsé")
+        val profile = tea("dark", "Thé vert corsé", green, aromas = listOf(corsé), rating = 8.0)
+        val aromaRequest = MadjoCriterion(
+            MadjoDimension.AROMA, "aroma", "CORSE", MadjoCriterionKind.ABSOLUTE_CONSTRAINT,
+            MadjoCriterionSource.INITIAL_REQUEST, corsé.id, "Corsé", "corsé",
+            provenance = MadjoCriterionProvenance(MadjoCriterionSource.INITIAL_REQUEST, "corsé", corsé.id, "Corsé", MadjoCriterionTransformation.DIRECT),
+        )
+        val outcome = MadjoRecommendationEngine.recommend(listOf(profile), MadjoRecommendationCriteria(listOf(aromaRequest)))
+        val recommendation = outcome.recommendations.single()
+        assertTrue(recommendation.explanation.startsWith("Thé vert."))
+        assertTrue(recommendation.explanation.contains("Corsé"))
+        assertFalse(recommendation.explanation.contains("ta demande de Thé vert"))
+        val category = recommendation.explanationEvidence.first { it.transformation == MadjoCriterionTransformation.DESCRIPTION && it.teaCharacteristic == "Thé vert" }
+        assertEquals("Thé vert", category.teaCharacteristic)
+        assertEquals(null, category.userExpression)
+    }
+
+    @Test fun aDirectRequestedColorHasExplicitRequestProvenance() {
+        val criterion = criterion(MadjoDimension.TYPE_COLOR, "category", "GREEN", green, MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
+        val recommendation = MadjoRecommendationEngine.recommend(listOf(greenChinaFloral), MadjoRecommendationCriteria(listOf(criterion))).recommendations.single()
+        assertTrue(recommendation.explanation.contains("« Thé vert », comme tu le souhaites."))
+        val color = recommendation.explanationEvidence.single { it.teaCharacteristic == "Thé vert" }
+        assertEquals(MadjoCriterionTransformation.DIRECT, color.transformation)
+        assertEquals(MadjoCriterionSource.INITIAL_REQUEST, color.source)
+    }
+
+    @Test fun absentTeaCharacteristicsNeverBecomeExplanationEvidence() {
+        val request = MadjoCriterion(
+            MadjoDimension.AROMA, "aroma", "FLORAL", MadjoCriterionKind.PREFERENCE,
+            MadjoCriterionSource.INITIAL_REQUEST, displayValue = "Floral", matchedText = "floral",
+            provenance = MadjoCriterionProvenance(MadjoCriterionSource.INITIAL_REQUEST, "floral", null, "Floral", MadjoCriterionTransformation.DIRECT),
+        )
+        val plainTea = tea("plain-proof", "Thé nature", green)
+        val recommendation = MadjoRecommendationEngine.recommend(listOf(plainTea), MadjoRecommendationCriteria(listOf(request))).recommendations.single()
+        assertTrue(recommendation.explanationEvidence.none { it.teaCharacteristic.equals("Floral", ignoreCase = true) })
+        assertFalse(recommendation.explanation.contains("notes aromatiques"))
+        assertTrue(recommendation.explanation.startsWith("Thé vert."))
     }
 
     @Test fun categoryOriginAndAromaConstraintsCombineAndExplanationsUseRealFields() {
@@ -261,7 +306,7 @@ class MadjoRecommendationEngineTest {
         val outcome = MadjoRecommendationEngine.recommend(listOf(greenChinaFloral, blackJapanFruity), conversation.criteria)
 
         assertSame(criteriaBefore, conversation.criteria)
-        assertEquals(listOf(greenChinaFloral.id), outcome.recommendations.map { it.tea.id })
+        assertEquals("${conversation.criteria} -> $outcome", listOf(greenChinaFloral.id), outcome.recommendations.map { it.tea.id })
     }
 
     private fun criterion(dimension: MadjoDimension, concept: String, value: String, ref: MadjoReference, kind: MadjoCriterionKind) =

@@ -63,6 +63,7 @@ data class SemanticMatch(
     val normalizedExpression: String,
     val matchType: SemanticMatchType,
     val relationType: SemanticRelationType? = null,
+    val userExpression: String? = null,
 )
 
 data class SemanticAmbiguity(
@@ -78,7 +79,8 @@ data class SemanticResolution(
 
 /** Local and deterministic phrase resolver. It returns concepts and provenance, never rewritten text. */
 object MadjoSemanticResolver {
-    private data class Hit(val start: Int, val end: Int, val expression: SemanticExpression, val concept: SemanticConcept)
+    private data class Hit(val start: Int, val end: Int, val expression: SemanticExpression, val concept: SemanticConcept, val userExpression: String)
+    private data class NormalizedText(val value: String, val originalStarts: List<Int>, val originalEnds: List<Int>)
 
     fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
         .replace(Regex("\\p{Mn}+"), "")
@@ -88,7 +90,8 @@ object MadjoSemanticResolver {
         .replace(Regex("\\s+"), " ")
 
     fun resolve(text: String, dictionary: SemanticDictionarySnapshot): SemanticResolution {
-        val normalizedText = normalize(text)
+        val mappedText = normalizeWithOffsets(text)
+        val normalizedText = mappedText.value
         if (normalizedText.isBlank()) return SemanticResolution(emptyList(), emptyList())
         val concepts = dictionary.concepts.filter(SemanticConcept::active).associateBy(SemanticConcept::id)
         val hits = dictionary.expressions.asSequence()
@@ -98,7 +101,13 @@ object MadjoSemanticResolver {
                 val normalized = expression.normalizedForm.ifBlank { normalize(expression.expression) }
                 if (normalized.isBlank()) return@mapNotNull null
                 val pattern = Regex("(?<![\\p{L}\\p{N}])${Regex.escape(normalized)}(?![\\p{L}\\p{N}])")
-                pattern.findAll(normalizedText).map { Hit(it.range.first, it.range.last + 1, expression, concept) }.toList()
+                pattern.findAll(normalizedText).map { match ->
+                    val start = match.range.first
+                    val end = match.range.last + 1
+                    val originalStart = mappedText.originalStarts[start]
+                    val originalEnd = mappedText.originalEnds[end - 1]
+                    Hit(start, end, expression, concept, text.substring(originalStart, originalEnd).trim())
+                }.toList()
             }
             .flatten()
             .groupBy { it.concept.domain }
@@ -116,7 +125,7 @@ object MadjoSemanticResolver {
                 val longest = sameStart.filter { it.end - it.start == longestLength }
                 val byConcept = longest.distinctBy { it.concept.id }
                 if (byConcept.size > 1) {
-                    ambiguities += SemanticAmbiguity(domain, longest.first().expression.expression, byConcept.map(Hit::concept))
+                    ambiguities += SemanticAmbiguity(domain, longest.first().userExpression, byConcept.map(Hit::concept))
                 } else if (accepted.none { overlaps(it, longest.first()) }) {
                     accepted += longest.first()
                 }
@@ -138,6 +147,7 @@ object MadjoSemanticResolver {
                             normalizedExpression = hit.expression.normalizedForm,
                             matchType = hit.expression.matchType(),
                             relationType = relation.type,
+                            userExpression = hit.userExpression,
                         ).let { if (childExpression == null) it else it.copy(concept = child) }
                     }
             }
@@ -152,7 +162,49 @@ object MadjoSemanticResolver {
         matchedExpression = expression.expression,
         normalizedExpression = expression.normalizedForm.ifBlank { normalize(expression.expression) },
         matchType = expression.matchType(),
+        userExpression = userExpression,
     )
+
+    /** Returns the actual surface text for a recognized phrase, retaining case and accents. */
+    fun userExpression(text: String, phrase: String): String? {
+        val target = normalize(phrase)
+        if (target.isBlank()) return null
+        val mapped = normalizeWithOffsets(text)
+        val start = mapped.value.indexOf(target)
+        if (start < 0) return null
+        val end = start + target.length
+        if ((start > 0 && mapped.value[start - 1].isLetterOrDigit()) || (end < mapped.value.length && mapped.value[end].isLetterOrDigit())) return null
+        return text.substring(mapped.originalStarts[start], mapped.originalEnds[end - 1]).trim()
+    }
+
+    private fun normalizeWithOffsets(text: String): NormalizedText {
+        val result = StringBuilder()
+        val starts = mutableListOf<Int>()
+        val ends = mutableListOf<Int>()
+        text.forEachIndexed { index, original ->
+            val lowered = Normalizer.normalize(original.toString(), Normalizer.Form.NFD).lowercase(Locale.ROOT)
+            lowered.forEach { character ->
+                if (Character.getType(character) == Character.NON_SPACING_MARK.toInt() ||
+                    Character.getType(character) == Character.COMBINING_SPACING_MARK.toInt() ||
+                    Character.getType(character) == Character.ENCLOSING_MARK.toInt()) return@forEach
+                if (character.isLetterOrDigit()) {
+                    result.append(character)
+                    starts += index
+                    ends += index + 1
+                } else if (result.isNotEmpty() && result.last() != ' ') {
+                    result.append(' ')
+                    starts += index
+                    ends += index + 1
+                }
+            }
+        }
+        while (result.isNotEmpty() && result.last() == ' ') {
+            result.setLength(result.length - 1)
+            starts.removeAt(starts.lastIndex)
+            ends.removeAt(ends.lastIndex)
+        }
+        return NormalizedText(result.toString(), starts, ends)
+    }
 
     private fun SemanticExpression.matchType() = if (isPrimary) SemanticMatchType.PRIMARY_LABEL else SemanticMatchType.SYNONYM
 }

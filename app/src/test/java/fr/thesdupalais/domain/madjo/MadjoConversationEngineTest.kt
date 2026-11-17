@@ -71,7 +71,7 @@ class MadjoConversationEngineTest {
         assertEquals(MadjoCriterionKind.ABSOLUTE_CONSTRAINT, criteria.single { it.concept == "country" }.kind)
         assertEquals(MadjoCriterionKind.PREFERENCE, criteria.single { it.concept == "moment" }.kind)
         assertEquals(MadjoCriterionKind.PREFERENCE, criteria.single { it.concept == "taste_rating" }.kind)
-        assertTrue(state.recommendationReady)
+        assertTrue(state.toString(), state.recommendationReady)
         assertTrue(state.questionsAsked.isEmpty())
         assertTrue(state.criteria.ambiguities.isEmpty())
     }
@@ -143,6 +143,10 @@ class MadjoConversationEngineTest {
         assertFalse(corrected.answers.last().resolvedQuestion)
         assertEquals("BLACK", corrected.criteria.criteria.single { it.concept == "category" }.value)
         assertEquals(MadjoCriterionKind.PREFERENCE, corrected.criteria.criteria.single { it.concept == "category" }.kind)
+        val correctedTea = MadjoTeaProfile("corrected-black", "Thé noir", categoryBlack.id, "BLACK", categoryBlack.label)
+        val explanation = MadjoRecommendationEngine.recommend(listOf(correctedTea), corrected.criteria).recommendations.single().explanation
+        assertTrue(explanation.contains("« Thé noir »"))
+        assertFalse(explanation.contains("Thé vert"))
     }
 
     @Test fun explicitAndCorrectedFactsRemainInTheProfileWithTheirProvenance() {
@@ -154,6 +158,20 @@ class MadjoConversationEngineTest {
         assertEquals("FRUITY", answered.criteria.criteria.single { it.concept == "aroma" }.value)
         assertEquals(MadjoCriterionSource.USER_ANSWER, answered.criteria.criteria.single { it.concept == "aroma" }.source)
         assertEquals("plutôt fruité", answered.messages.last { it.speaker == MadjoSpeaker.USER }.text)
+    }
+
+    @Test fun peuImporteRemovesAnyCriterionForTheAskedDimensionWithoutInventingOne() {
+        val corsé = MadjoReference("aroma-corse", "CORSE", "Corsé")
+        val withCorsé = vocabulary.copy(aromas = vocabulary.aromas + corsé)
+        val initial = MadjoConversationEngine.start("Madjo, je veux un thé corsé", withCorsé)
+        assertEquals(MadjoQuestionId.TYPE_COLOR, initial.currentQuestion?.id)
+        val answered = MadjoConversationEngine.submitAnswer(initial, MadjoQuestionId.TYPE_COLOR, "Peu importe")
+
+        assertTrue(answered.recommendationReady)
+        assertTrue(answered.criteria.criteria.none { it.concept == "category" })
+        assertTrue(answered.criteria.criteria.any { it.concept == "beverage_type" && it.value == "tea" })
+        assertTrue(answered.criteria.criteria.any { it.concept == "aroma" && it.value == "CORSE" })
+        assertFalse(answered.recognizedFacts.contains("category"))
     }
 
     @Test fun unknownAromaAndOriginBecomeAmbiguitiesInsteadOfInventedCriteria() {
