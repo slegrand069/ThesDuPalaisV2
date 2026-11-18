@@ -46,6 +46,9 @@ interface TeaDao {
     @Query("UPDATE teas SET stockMilliGrams = :stockMilliGrams WHERE id = :teaId AND archivedAtEpochMillis IS NULL")
     suspend fun updateStock(teaId: UUID, stockMilliGrams: Long): Int
 
+    @Query("UPDATE teas SET containerRefId = :containerId, stockMilliGrams = :stockMilliGrams WHERE id = :teaId AND archivedAtEpochMillis IS NULL")
+    suspend fun updateInventoryFields(teaId: UUID, containerId: UUID?, stockMilliGrams: Long?): Int
+
     @Query("UPDATE teas SET archivedAtEpochMillis = :archivedAtEpochMillis WHERE id = :teaId AND archivedAtEpochMillis IS NULL")
     suspend fun archiveActive(teaId: UUID, archivedAtEpochMillis: Long): Int
 
@@ -282,6 +285,8 @@ interface TastingDao {
 interface StockMovementDao {
     @Query("SELECT * FROM stock_movements ORDER BY id")
     suspend fun allForBackup(): List<StockMovementEntity>
+    @Query("SELECT * FROM stock_movements WHERE teaId = :teaId ORDER BY occurredAtEpochMillis, recordedAtEpochMillis, id")
+    suspend fun findForTea(teaId: UUID): List<StockMovementEntity>
     @Query("SELECT COUNT(*) FROM stock_movements")
     suspend fun count(): Int
 

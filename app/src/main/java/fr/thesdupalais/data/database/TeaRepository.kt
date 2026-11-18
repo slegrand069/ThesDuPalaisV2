@@ -37,6 +37,14 @@ data class TeaEditData(
     val references: Map<ReferenceKind, List<ReferenceValue>>,
 )
 
+data class InventoryTeaChange(
+    val teaId: UUID,
+    val containerId: UUID?,
+    val changeContainer: Boolean,
+    val stockMilliGrams: Long?,
+    val changeStock: Boolean,
+)
+
 enum class TeaEditableField {
     NAME, CATEGORY, STATUS, CONTAINER, COUNTRIES, REGIONS, AROMAS, PROFILES, MOMENTS, BADGES,
     TASTE_RATING, OLFACTORY_RATING, PERSONAL_NOTES, DESCRIPTION, TECHNICAL_INFORMATION,
@@ -47,6 +55,56 @@ class TeaRepository(
     private val database: AppDatabase,
     private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
 ) {
+    /** Applies a fully validated inventory batch atomically; stock edits are absolute values. */
+    suspend fun applyInventoryChanges(changes: List<InventoryTeaChange>): Int = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val teas = database.teaDao()
+            val references = database.referenceDao()
+            val movements = database.stockMovementDao()
+            val prepared = changes.map { change ->
+                require(change.changeContainer || change.changeStock) { "Aucune modification à enregistrer." }
+                val old = teas.findActiveById(change.teaId)
+                    ?: throw IllegalStateException("Une fiche n’est plus active. Actualisez l’inventaire.")
+                if (change.changeContainer && change.containerId != null) {
+                    val reference = references.findById(change.containerId)
+                    require(reference?.kind == ReferenceKind.CONTAINER.name && reference.archivedAt == null) {
+                        "Un contenant sélectionné n’est plus disponible."
+                    }
+                }
+                val nextContainer = if (change.changeContainer) change.containerId else old.containerRefId
+                val nextStock = if (change.changeStock) requireNotNull(change.stockMilliGrams) else old.stockMilliGrams
+                val containerChanged = nextContainer != old.containerRefId
+                val stockChanged = nextStock != old.stockMilliGrams
+                val movement = if (stockChanged && nextStock != null) {
+                    val existing = movements.findForTea(change.teaId)
+                    val now = System.currentTimeMillis()
+                    val previous = existing.lastOrNull()
+                    if (old.stockMilliGrams == null || previous == null) {
+                        StockMovementEntity(UUID.randomUUID(), change.teaId, "INVENTORY", null, nextStock, now, now, null, "Inventaire")
+                    } else {
+                        val delta = Math.subtractExact(nextStock, previous.stockAfterMilliGrams)
+                        check(delta != 0L) { "Le stock n’a pas changé." }
+                        StockMovementEntity(UUID.randomUUID(), change.teaId, "CORRECTION", delta, nextStock, now, now, null, "Correction d’inventaire")
+                    }
+                } else null
+                PreparedInventoryChange(change.teaId, nextContainer, nextStock, containerChanged || stockChanged, movement)
+            }
+            var updated = 0
+            prepared.filter(PreparedInventoryChange::changed).forEach { item ->
+                check(teas.updateInventoryFields(item.teaId, item.containerId, item.stockMilliGrams) == 1) {
+                    "Une fiche n’a pas pu être mise à jour. Aucune modification n’a été conservée."
+                }
+                item.movement?.let { movement -> movements.insert(movement) }
+                updated++
+            }
+            updated
+        }
+    }
+
+    private data class PreparedInventoryChange(
+        val teaId: UUID, val containerId: UUID?, val stockMilliGrams: Long?, val changed: Boolean,
+        val movement: StockMovementEntity?,
+    )
     /** Removes a tea from the active catalogue without deleting its record or related tasting history. */
     suspend fun archiveTea(teaId: UUID): Boolean = writeCoordinator.withWritePermit {
         database.withTransaction {

@@ -47,7 +47,7 @@ import kotlin.math.max
 @Composable
 fun StatisticsScreen(
     viewModel: StatisticsViewModel,
-    onBackToSettings: () -> Unit,
+    onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -55,7 +55,7 @@ fun StatisticsScreen(
             Modifier.fillMaxWidth().height(56.dp).background(MaterialTheme.colorScheme.surface),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onBackToSettings, modifier = Modifier.size(56.dp).testTag("statistics-back")) {
+            TextButton(onClick = onBack, modifier = Modifier.size(56.dp).testTag("statistics-back")) {
                 Text("‹", style = MaterialTheme.typography.headlineMedium)
             }
             Text("Statistiques", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
@@ -81,6 +81,7 @@ private fun StatisticsContent(snapshot: StatisticsSnapshot, onPeriodSelected: (S
         }
         SummaryGrid(snapshot)
         TastingColorCard(snapshot, onPeriodSelected)
+        TastingCountryCard(snapshot.tastingsByCountry)
         StockByColorCard(snapshot.stockByColor)
         StockByCountryCard(snapshot.stockByCountry)
         StockByBadgeCard(snapshot.stockByBadge)
@@ -145,6 +146,18 @@ private fun TastingColorCard(snapshot: StatisticsSnapshot, onPeriodSelected: (St
 }
 
 @Composable
+private fun TastingCountryCard(values: List<StatisticsBucket>) {
+    StatisticsCard("Dégustations par pays", "Nombre d’événements · origine attribuée une seule fois") {
+        if (values.isEmpty()) EmptyChartMessage("Aucune dégustation avec une origine disponible sur cette période.") else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PieChart(values, Modifier.size(124.dp))
+                Legend(values, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
 private fun StockByColorCard(values: List<StatisticsBucket>) {
     StatisticsCard("Stock par couleur", "Répartition instantanée · en grammes") {
         if (values.isEmpty()) EmptyChartMessage("Aucun stock renseigné à répartir.") else HorizontalBars(values)
@@ -153,7 +166,7 @@ private fun StockByColorCard(values: List<StatisticsBucket>) {
 
 @Composable
 private fun StockByCountryCard(values: List<StatisticsBucket>) {
-    StatisticsCard("Stock par pays d’origine", "Pays uniquement · une origine multiple compte dans chaque pays; la somme peut dépasser le stock total") {
+    StatisticsCard("Stock par pays d’origine", "Chaque fiche est affectée à une seule catégorie d’origine.") {
         if (values.isEmpty()) EmptyChartMessage("Aucun stock renseigné à répartir.") else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PieChart(values, Modifier.size(124.dp))
@@ -209,8 +222,9 @@ private fun TopFiveCard(snapshot: StatisticsSnapshot) {
 
 @Composable
 private fun MonthlyTastingsCard(snapshot: StatisticsSnapshot) {
-    StatisticsCard("Évolution des dégustations", "Événements par mois · 6 derniers mois") {
+    StatisticsCard("Évolution des dégustations", "Événements par mois et couleur · 6 derniers mois") {
         MonthlyBarChart(snapshot.monthlyTastings)
+        MonthlyTastingLegend(snapshot.monthlyTastings.flatMap { it.segments }.distinctBy { it.colorKey })
         Text("Total des 6 mois affichés : ${snapshot.monthlyTastings.sumOf { it.count }} dégustations", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
     }
 }
@@ -275,21 +289,47 @@ private fun HorizontalBars(values: List<StatisticsBucket>, labelWidth: androidx.
 
 @Composable
 private fun MonthlyBarChart(months: List<MonthlyTastingCount>) {
-    val maximum = max(1, months.maxOfOrNull { it.count } ?: 0)
-    Row(Modifier.fillMaxWidth().height(126.dp).semantics {
+    val maximum = months.maxOfOrNull { it.count } ?: 0
+    val plotHeight = 158.dp
+    val baselineColor = MaterialTheme.colorScheme.outline
+    Row(Modifier.fillMaxWidth().height(224.dp).semantics {
         contentDescription = "Dégustations par mois : " + months.joinToString { "${it.label}, ${it.count}" }
     }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
         months.forEach { item ->
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
                 Text(item.count.toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
-                if (item.count > 0) {
-                    Box(Modifier.width(30.dp).height((68f * item.count / maximum).coerceAtLeast(2f).dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)))
-                } else {
-                    Spacer(Modifier.width(30.dp).height(1.dp))
+                androidx.compose.foundation.Canvas(Modifier.width(30.dp).height(plotHeight)) {
+                    if (item.count <= 0) {
+                        drawLine(baselineColor, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx())
+                    } else {
+                        val scaledHeight = size.height * monthlyBarHeightFraction(item.count, maximum)
+                        var currentTop = size.height - scaledHeight
+                        item.segments.filter { it.count > 0 }.forEach { segment ->
+                            val segmentHeight = scaledHeight * segment.count / item.count
+                            drawRect(
+                                color = statisticsColor(segment.colorKey, 0),
+                                topLeft = Offset(0f, currentTop),
+                                size = androidx.compose.ui.geometry.Size(size.width, segmentHeight),
+                            )
+                            currentTop += segmentHeight
+                        }
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(item.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthlyTastingLegend(values: List<MonthlyTastingSegment>) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        values.forEach { item ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Spacer(Modifier.size(9.dp).background(statisticsColor(item.colorKey, 0)))
+                Text(compactMonthlyLegendLabel(item.label), style = MaterialTheme.typography.labelSmall, maxLines = 1)
             }
         }
     }
@@ -308,12 +348,29 @@ private fun formatGrams(milliGrams: Long): String {
 
 private fun unknownStockCaption(count: Int): String = if (count == 0) "stock connu" else "$count stock(s) non renseigné(s)"
 
-private fun statisticsColor(key: String?, index: Int): Color = when (key?.uppercase(Locale.ROOT)) {
-    "GREEN" -> Color(0xFF315F49)
-    "BLACK" -> Color(0xFF705038)
-    "OOLONG" -> Color(0xFFC27B42)
-    "WHITE" -> Color(0xFFD4C3A4)
-    "PU_ERH", "PU-ERH" -> Color(0xFFA66F54)
-    "YELLOW" -> Color(0xFFD9B640)
-    else -> listOf(Color(0xFF8C9B82), Color(0xFF76918D), Color(0xFF937C9C), Color(0xFFBE8A91), Color(0xFF7A8EA8))[index % 5]
+private fun statisticsColor(key: String?, index: Int): Color {
+    val stable = key?.uppercase(Locale.ROOT).orEmpty()
+    return when (stable) {
+        "GREEN" -> Color(0xFF315F49)
+        "BLACK" -> Color(0xFF9A4B4B)
+        "YELLOW" -> Color(0xFFE2C35A)
+        "OOLONG" -> Color(0xFFD38A51)
+        "WHITE" -> Color(0xFFD4C3A4)
+        "MIXED", "MIXTE" -> Color(0xFF9A80B5)
+        "PU_ERH", "PU-ERH" -> Color(0xFF76503C)
+        "DARK" -> Color(0xFF493329)
+        "INFUSION" -> Color(0xFF7DA6C8)
+        "MATE" -> Color(0xFF9DBE78)
+        "COUNTRY_CHINA" -> Color(0xFFFFD43B)
+        "COUNTRY_JAPAN" -> Color(0xFFE53935)
+        "COUNTRY_INDIA" -> Color(0xFFFB8C00)
+        "COUNTRY_VIETNAM" -> Color(0xFF1E88E5)
+        "COUNTRY_SOUTH_AFRICA" -> Color(0xFF43A047)
+        "ORIGIN_MULTIPLE" -> Color(0xFF00A6A6)
+        "ORIGIN_NC", "ORIGIN_UNKNOWN" -> Color(0xFF7C8790)
+        else -> {
+            val palette = listOf(Color(0xFF8C9B82), Color(0xFF76918D), Color(0xFF937C9C), Color(0xFFBE8A91), Color(0xFF7A8EA8), Color(0xFFBE9B6A), Color(0xFF648DAD))
+            palette[(stable.hashCode().ushr(1) % palette.size)]
+        }
+    }
 }

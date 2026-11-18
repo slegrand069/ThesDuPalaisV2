@@ -1,7 +1,5 @@
 package fr.thesdupalais.presentation.navigation
 
-import android.widget.Toast
-
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,11 +18,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -89,6 +92,9 @@ import fr.thesdupalais.presentation.articles.ArticleDetailViewModelFactory
 import fr.thesdupalais.presentation.statistics.StatisticsScreen
 import fr.thesdupalais.presentation.statistics.StatisticsViewModel
 import fr.thesdupalais.presentation.statistics.StatisticsViewModelFactory
+import fr.thesdupalais.presentation.inventory.InventoryScreen
+import fr.thesdupalais.presentation.inventory.InventoryViewModel
+import fr.thesdupalais.presentation.inventory.InventoryViewModelFactory
 import java.util.UUID
 import kotlinx.coroutines.flow.map
 
@@ -116,7 +122,11 @@ private enum class MainDestination(val route: String, val label: String, val ico
 @Composable
 fun AppNavigation(container: AppContainer) {
     val navController = rememberNavController()
-    val context = LocalContext.current
+    val inventoryViewModel: InventoryViewModel = viewModel(
+        key = "inventory-root-view-model",
+        factory = InventoryViewModelFactory(container.teaRepository, container.database.teaDao()),
+    )
+    var pendingInventoryDestination by remember { mutableStateOf<MainDestination?>(null) }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
 
@@ -144,15 +154,16 @@ fun AppNavigation(container: AppContainer) {
                         Column(
                             modifier = Modifier.weight(1f).fillMaxSize()
                                 .clickable {
-                                    if (destination == MainDestination.INVENTORY) {
-                                        Toast.makeText(context, "Bientôt disponible", Toast.LENGTH_SHORT).show()
-                                        return@clickable
-                                    }
-                                    navController.navigate(destination.route) {
+                                    val navigate = {
+                                      navController.navigate(destination.route) {
                                         popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                                         launchSingleTop = true
                                         restoreState = true
+                                      }
                                     }
+                                    if (currentDestination?.route == MainDestination.INVENTORY.route && destination.route != currentDestination?.route && inventoryViewModel.hasUnsavedChanges()) {
+                                        pendingInventoryDestination = destination
+                                    } else navigate()
                                 }
                                 .testTag("bottom-tab-${destination.route}"),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -188,6 +199,11 @@ fun AppNavigation(container: AppContainer) {
                     onAddTea = { navController.navigate(TEA_CREATE_ROUTE) },
                 )
             }
+            composable(MainDestination.INVENTORY.route) {
+                InventoryScreen(inventoryViewModel) {
+                    if (!navController.popBackStack()) navController.navigate(MainDestination.CATALOGUE.route)
+                }
+            }
             teaCreationDestination(navController, container.teaRepository)
             teaEditingDestination(navController, container.teaRepository)
             composable(MainDestination.KNOWLEDGE.route) {
@@ -208,8 +224,7 @@ fun AppNavigation(container: AppContainer) {
                     factory = StatisticsViewModelFactory(container.database.teaDao()),
                 )
                 StatisticsScreen(statisticsViewModel) {
-                    navController.navigate(MainDestination.SETTINGS.route) {
-                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    if (!navController.popBackStack()) navController.navigate(MainDestination.CATALOGUE.route) {
                         launchSingleTop = true
                         restoreState = true
                     }
@@ -242,13 +257,6 @@ fun AppNavigation(container: AppContainer) {
                     viewModel = settingsViewModel,
                     container = container,
                     onOpenReference = { kind -> navController.navigate("references/${kind.name}") },
-                    onOpenStatistics = {
-                        navController.navigate(MainDestination.STATISTICS.route) {
-                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
                 )
             }
             composable(
@@ -329,6 +337,25 @@ fun AppNavigation(container: AppContainer) {
                 }
             }
         }
+    }
+    pendingInventoryDestination?.let { destination ->
+        AlertDialog(
+            onDismissRequest = { pendingInventoryDestination = null },
+            title = { Text("Modifications non enregistrées") },
+            text = { Text("Changer d’écran sans enregistrer les modifications de l’inventaire ?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingInventoryDestination = null
+                    inventoryViewModel.discardChanges()
+                    navController.navigate(destination.route) {
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }) { Text("Quitter") }
+            },
+            dismissButton = { TextButton(onClick = { pendingInventoryDestination = null }) { Text("Continuer") } },
+        )
     }
 }
 
@@ -435,14 +462,14 @@ private fun BottomNavigationIcon(kind: String, selected: Boolean) {
 }
 
 @Composable
-private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenStatistics: () -> Unit) {
+private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit) {
     val settingsNavController = rememberNavController()
     val dictionaryViewModel: SemanticDictionaryViewModel = viewModel(
         factory = SemanticDictionaryViewModelFactory(container.semanticDictionaryRepository, container.database.referenceDao()),
     )
     NavHost(settingsNavController, startDestination = SETTINGS_HOME_ROUTE, modifier = Modifier.fillMaxSize()) {
         composable(SETTINGS_HOME_ROUTE) {
-            SettingsHomeScreen(viewModel, container, onOpenReference, onOpenStatistics) {
+            SettingsHomeScreen(viewModel, container, onOpenReference) {
                 dictionaryViewModel.clearMessage()
                 settingsNavController.navigate(MADJO_DICTIONARY_ROUTE)
             }
@@ -484,7 +511,7 @@ private fun SettingsScreen(viewModel: SettingsViewModel, container: AppContainer
 }
 
 @Composable
-private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenStatistics: () -> Unit, onOpenMadjoDictionary: () -> Unit) {
+private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppContainer, onOpenReference: (ReferenceKind) -> Unit, onOpenMadjoDictionary: () -> Unit) {
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     val preferencesLoaded by viewModel.preferencesLoaded.collectAsStateWithLifecycle()
     val recovery by container.recoveryInspection.collectAsStateWithLifecycle()
@@ -509,20 +536,6 @@ private fun SettingsHomeScreen(viewModel: SettingsViewModel, container: AppConta
                 if (rowFamilies.size == 1) Spacer(Modifier.weight(1f))
             }
             Spacer(Modifier.height(8.dp))
-        }
-        Spacer(Modifier.height(14.dp))
-        Text("Statistiques", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(10.dp))
-        Surface(
-            onClick = onOpenStatistics,
-            modifier = Modifier.fillMaxWidth().height(54.dp).testTag("settings-statistics"),
-            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Ouvrir les statistiques", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-            }
         }
         Spacer(Modifier.height(14.dp))
         Text("Madjo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

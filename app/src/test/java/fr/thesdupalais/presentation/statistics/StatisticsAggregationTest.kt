@@ -69,12 +69,13 @@ class StatisticsAggregationTest {
             tea("unknown", stock = null),
             tea("flagged-high-stock", stock = 150_000, status = "TO_REBUY"),
             tea("flagged-low-stock", stock = 20_000, status = "TO_REBUY", tastings = listOf(on(today), on(today.minusDays(40)))),
+            tea("avoid-low-stock", stock = 10_000, status = "AVOID"),
         )
         val result = snapshot(rows)
-        assertEquals(3, result.lowStockCount)
+        assertEquals(4, result.lowStockCount)
         assertEquals(listOf("empty", "flagged-low-stock", "under"), result.purchaseSuggestions.map { it.name })
         assertFalse(result.purchaseSuggestions.any { it.name == "boundary" || it.name == "unknown" || it.name == "flagged-high-stock" })
-        assertEquals(150_000L + 30_000L + 20_000L + 29_999L, result.knownStockMilliGrams)
+        assertEquals(150_000L + 30_000L + 20_000L + 29_999L + 10_000L, result.knownStockMilliGrams)
         val frequent = result.purchaseSuggestions.first { it.name == "flagged-low-stock" }
         assertEquals(2, frequent.tastingCount)
         assertEquals(1, snapshot(rows, StatisticsPeriod.DAYS_30).purchaseSuggestions.first { it.name == "flagged-low-stock" }.tastingCount)
@@ -134,17 +135,94 @@ class StatisticsAggregationTest {
     }
 
     @Test
-    fun multipleCountriesReceiveFullKnownStockAndMissingCountryIsExplicit() {
+    fun multipleCountriesAreGroupedOnceAndMissingCountryIsExplicit() {
         val rows = listOf(
             tea("blend", stock = 40_000, countries = listOf(japan, china)),
             tea("Thé japonais sans origine", stock = 5_000),
         )
         val countryStock = snapshot(rows).stockByCountry.associate { it.label to it.value }
-        assertEquals(40_000L, countryStock["Japon"])
-        assertEquals(40_000L, countryStock["Chine"])
+        assertEquals(40_000L, countryStock["Origines multiples"])
         assertEquals(5_000L, countryStock["Non renseigné"])
-        assertEquals(85_000L, countryStock.values.sum())
-        assertEquals(listOf(40_000L, 40_000L, 5_000L), snapshot(rows).stockByCountry.map { it.value })
+        assertEquals(45_000L, countryStock.values.sum())
+        assertEquals(listOf(40_000L, 5_000L), snapshot(rows).stockByCountry.map { it.value })
+    }
+
+    @Test
+    fun tastingsByCountryAssignsEachEventOnceAndUsesDedicatedMultipleAndNcBuckets() {
+        val nc = ref("country-nc", "NC", null)
+        val rows = listOf(
+            tea("japan-event", countries = listOf(japan), tastings = listOf(on(today), on(today.minusDays(1)))),
+            tea("china-event", countries = listOf(china), tastings = listOf(on(today))),
+            tea("multi-event", countries = listOf(japan, china), tastings = listOf(on(today))),
+            tea("nc-event", countries = listOf(nc), tastings = listOf(on(today))),
+            tea("unknown-event", tastings = listOf(on(today))),
+        )
+        val result = snapshot(rows)
+        assertEquals(6, result.tastingEventCount)
+        val buckets = result.tastingsByCountry.associateBy { it.label }
+        assertEquals(2L, buckets.getValue("Japon").value)
+        assertEquals("COUNTRY_CHINA", buckets.getValue("Chine").colorKey)
+        assertEquals(1L, buckets.getValue("Chine").value)
+        assertEquals(1L, buckets.getValue("Origines multiples").value)
+        assertEquals(1L, buckets.getValue("NC / non communiqué").value)
+        assertEquals(1L, buckets.getValue("Non renseigné").value)
+        assertEquals(6L, result.tastingsByCountry.sumOf { it.value })
+        assertEquals("COUNTRY_JAPAN", buckets.getValue("Japon").colorKey)
+        assertEquals("ORIGIN_MULTIPLE", buckets.getValue("Origines multiples").colorKey)
+    }
+
+    @Test
+    fun tastingsByCountryUsesCommonPeriodAndOmitsZeroOriginCategories() {
+        val rows = listOf(
+            tea("recent-japan", countries = listOf(japan), tastings = listOf(on(today))),
+            tea("old-china", countries = listOf(china), tastings = listOf(on(today.minusDays(50)))),
+        )
+        val thirtyDays = snapshot(rows, StatisticsPeriod.DAYS_30)
+        assertEquals(1, thirtyDays.tastingEventCount)
+        assertEquals(listOf("Japon"), thirtyDays.tastingsByCountry.map { it.label })
+    }
+
+    @Test
+    fun monthlyStackSegmentsSumToEachIntervalTotal() {
+        val rows = listOf(
+            tea("green", category = green, tastings = listOf(on(today), on(today.minusDays(1)))),
+            tea("black", category = black, tastings = listOf(on(today))),
+        )
+        val month = snapshot(rows).monthlyTastings.last()
+        assertEquals(month.count, month.segments.sumOf { it.count })
+        assertEquals(3, month.count)
+        assertEquals(setOf("GREEN", "BLACK"), month.segments.map { it.colorKey }.toSet())
+    }
+
+    @Test
+    fun monthlyBarsUseDynamicMaximumWithSmallHeadroomAndKeepRareSegmentsProportional() {
+        val fractionForSixteen = monthlyBarHeightFraction(16, 16)
+        val fractionForTwoHundred = monthlyBarHeightFraction(200, 200)
+        assertEquals(fractionForSixteen, fractionForTwoHundred, 0.0001f)
+        assertEquals(1f / 1.08f, fractionForSixteen, 0.0001f)
+        val rareSegmentFraction = monthlyBarHeightFraction(1, 200)
+        assertEquals(1f / 200f / 1.08f, rareSegmentFraction, 0.00001f)
+        assertTrue(rareSegmentFraction > 0f)
+        assertEquals(0f, monthlyBarHeightFraction(0, 200), 0f)
+    }
+
+    @Test
+    fun compactMonthlyLegendRemovesOnlyTheRedundantTeaPrefix() {
+        assertEquals("noir", compactMonthlyLegendLabel("Thé noir"))
+        assertEquals("sombre", compactMonthlyLegendLabel("thé sombre"))
+        assertEquals("noir + vert", compactMonthlyLegendLabel("noir +Thé vert"))
+        assertEquals("vert + blanc", compactMonthlyLegendLabel("Thé vert + Thé blanc"))
+        assertEquals("Pu’erh", compactMonthlyLegendLabel("Pu’erh"))
+        assertEquals("Infusion", compactMonthlyLegendLabel("Infusion"))
+    }
+
+    @Test
+    fun categoryPaletteKeyIsSharedAcrossTastingStockAndMonthlyCharts() {
+        val mixed = ref("custom-mixed", "Mixte", null)
+        val result = snapshot(listOf(tea("mixed", category = mixed, stock = 10_000, tastings = listOf(on(today)))))
+        assertEquals("MIXED", result.tastingsByColor.single().colorKey)
+        assertEquals("MIXED", result.stockByColor.single().colorKey)
+        assertEquals("MIXED", result.monthlyTastings.last().segments.single().colorKey)
     }
 
     @Test

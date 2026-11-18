@@ -30,6 +30,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
 
 data class CatalogueTea(
     val id: UUID,
@@ -122,11 +125,29 @@ enum class TasteRatingFilter(val label: String) {
 
 enum class StockFilter(val label: String) { ALL("Tous"), UNSPECIFIED("Non renseigné"), EMPTY("Épuisé"), LOW("Faible"), IMPORTANT("Important") }
 
+private data class CatalogueDerivedData(
+    val teas: List<CatalogueTea>,
+    val profiles: List<MadjoTeaProfile>,
+    val options: CatalogueFilterOptions,
+    val vocabulary: MadjoVocabulary,
+)
+
+internal data class MadjoResultsRequest(val criteria: MadjoRecommendationCriteria, val acceptedRelaxations: List<MadjoCriterion> = emptyList())
+
+internal fun observeMadjoResults(
+    profiles: Flow<List<MadjoTeaProfile>>,
+    requests: Flow<MadjoResultsRequest?>,
+    rank: (List<MadjoTeaProfile>, MadjoResultsRequest) -> MadjoRecommendationOutcome = { teas, request ->
+        MadjoRecommendationEngine.recommend(teas, request.criteria, request.acceptedRelaxations)
+    },
+): Flow<MadjoRecommendationOutcome?> = combine(profiles, requests) { teas, request ->
+    request?.let { rank(teas, it) }
+}.flowOn(Dispatchers.Default)
+
 class CatalogueViewModel(teaDao: TeaDao, private val semanticDictionary: Flow<SemanticDictionarySnapshot> = flowOf(SemanticDictionarySnapshot())) : ViewModel() {
     private val criteria = MutableStateFlow(CatalogueCriteria())
     private val madjoConversation = MutableStateFlow<MadjoConversationState?>(null)
-    private data class ResultsRequest(val criteria: MadjoRecommendationCriteria, val acceptedRelaxations: List<MadjoCriterion> = emptyList())
-    private val madjoResultsRequest = MutableStateFlow<ResultsRequest?>(null)
+    private val madjoResultsRequest = MutableStateFlow<MadjoResultsRequest?>(null)
     private var madjoSessionSequence = 0
     val currentCriteria get() = criteria.value
 
@@ -147,7 +168,7 @@ class CatalogueViewModel(teaDao: TeaDao, private val semanticDictionary: Flow<Se
         )
         if (!MadjoConversationEngine.requiresDialogue(prepared)) {
             madjoConversation.value = null
-            madjoResultsRequest.value = ResultsRequest(prepared.criteria)
+            madjoResultsRequest.value = MadjoResultsRequest(prepared.criteria)
         } else madjoConversation.value = prepared
     }
     fun submitMadjoAnswer(questionId: MadjoQuestionId, answer: String, profiles: List<MadjoTeaProfile> = emptyList()) {
@@ -161,7 +182,7 @@ class CatalogueViewModel(teaDao: TeaDao, private val semanticDictionary: Flow<Se
         }
     }
     fun requestMadjoRecommendations() {
-        madjoConversation.value?.let { current -> madjoResultsRequest.value = ResultsRequest(current.criteria) }
+        madjoConversation.value?.let { current -> madjoResultsRequest.value = MadjoResultsRequest(current.criteria) }
     }
     fun acceptMadjoRelaxation(criterion: MadjoCriterion) {
         madjoResultsRequest.value?.let { current ->
@@ -185,7 +206,7 @@ class CatalogueViewModel(teaDao: TeaDao, private val semanticDictionary: Flow<Se
             )
             if (!MadjoConversationEngine.requiresDialogue(prepared)) {
                 madjoConversation.value = null
-                madjoResultsRequest.value = ResultsRequest(prepared.criteria)
+                madjoResultsRequest.value = MadjoResultsRequest(prepared.criteria)
             } else madjoConversation.value = prepared
         }
     }
@@ -207,26 +228,36 @@ class CatalogueViewModel(teaDao: TeaDao, private val semanticDictionary: Flow<Se
     ) }
     fun resetAll() { criteria.value = CatalogueCriteria(); madjoConversation.value = null; madjoResultsRequest.value = null }
 
-    val state = combine(teaDao.observeActiveCatalog(), criteria, madjoConversation, madjoResultsRequest, semanticDictionary) { rows, current, conversation, resultsRequest, semanticSnapshot ->
+    private val catalogueData = combine(teaDao.observeActiveCatalog(), semanticDictionary) { rows, semanticSnapshot ->
         val allTeas = rows.map(TeaWithCatalogData::toCatalogueTea)
         val recommendationProfiles = allTeas.map(CatalogueTea::toMadjoTeaProfile)
         val options = rows.toFilterOptions()
         val madjoVocabulary = rows.toMadjoVocabulary(options, semanticSnapshot)
-        val madjoResults = resultsRequest?.let { MadjoRecommendationEngine.recommend(recommendationProfiles, it.criteria, it.acceptedRelaxations) }
-        val madjoRequest = conversation != null && resultsRequest == null
+        CatalogueDerivedData(allTeas, recommendationProfiles, options, madjoVocabulary)
+    }.flowOn(Dispatchers.Default)
+
+    /** Recommendation ranking is recomputed only when the collection/dictionary/request changes, never on keystrokes. */
+    private val madjoResults = observeMadjoResults(catalogueData.map { it.profiles }, madjoResultsRequest)
+
+    val state = combine(catalogueData, criteria, madjoConversation, madjoResults) { data, current, conversation, result ->
+        val allTeas = data.teas
+        val options = data.options
+        val madjoVocabulary = data.vocabulary
+        val madjoResults = result
+        val madjoRequest = conversation != null && madjoResults == null
         if (allTeas.isEmpty()) return@combine CatalogueUiState.Empty(current, options, madjoRequest, conversation?.initialRequest, conversation, madjoVocabulary, madjoResults)
         if (madjoRequest || madjoResults != null) {
             return@combine CatalogueUiState.Content(
                 emptyList(), current, options, madjoRequest = madjoRequest,
                 madjoRequestText = conversation?.initialRequest, madjoConversation = conversation,
-                madjoVocabulary = madjoVocabulary, madjoResults = madjoResults, recommendationProfiles = recommendationProfiles,
+                madjoVocabulary = madjoVocabulary, madjoResults = madjoResults, recommendationProfiles = data.profiles,
             )
         }
         val visible = allTeas.filter { tea -> matchesCatalogueTea(tea, current) }
         val sortedVisible = if (!current.hasFilters) sortCatalogueDefault(visible) else visible
         CatalogueUiState.Content(
             sortedVisible, current, options, noResults = visible.isEmpty(),
-            madjoVocabulary = madjoVocabulary, recommendationProfiles = recommendationProfiles,
+            madjoVocabulary = madjoVocabulary, recommendationProfiles = data.profiles,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), CatalogueUiState.Loading)
 }

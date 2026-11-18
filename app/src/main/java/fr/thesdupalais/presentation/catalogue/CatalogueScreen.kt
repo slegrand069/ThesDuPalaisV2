@@ -1,6 +1,7 @@
 package fr.thesdupalais.presentation.catalogue
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -355,20 +357,21 @@ private fun MadjoResultsPanel(
                 }
             }
         } else {
-            outcome.recommendations.forEach { recommendation ->
+            outcome.recommendations.forEachIndexed { index, recommendation ->
+                if (index > 0) androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .45f))
                 Surface(
                     modifier = Modifier.fillMaxWidth().testTag("madjo-result-${recommendation.tea.id}"),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RectangleShape,
                     color = MaterialTheme.colorScheme.surfaceVariant,
                 ) {
-                    TextButton(
-                        onClick = { runCatching { UUID.fromString(recommendation.tea.id) }.getOrNull()?.let(onTeaSelected) },
-                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .clickable { runCatching { UUID.fromString(recommendation.tea.id) }.getOrNull()?.let(onTeaSelected) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(recommendation.tea.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(recommendation.explanation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        Text(recommendation.tea.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(recommendation.explanation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

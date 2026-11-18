@@ -117,7 +117,7 @@ class MadjoRecommendationEngineTest {
     @Test fun aDirectRequestedColorHasExplicitRequestProvenance() {
         val criterion = criterion(MadjoDimension.TYPE_COLOR, "category", "GREEN", green, MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
         val recommendation = MadjoRecommendationEngine.recommend(listOf(greenChinaFloral), MadjoRecommendationCriteria(listOf(criterion))).recommendations.single()
-        assertTrue(recommendation.explanation.contains("« Thé vert », comme tu le souhaites."))
+        assertTrue(recommendation.explanation.contains("Thé vert, conformément à ta demande."))
         val color = recommendation.explanationEvidence.single { it.teaCharacteristic == "Thé vert" }
         assertEquals(MadjoCriterionTransformation.DIRECT, color.transformation)
         assertEquals(MadjoCriterionSource.INITIAL_REQUEST, color.source)
@@ -157,7 +157,7 @@ class MadjoRecommendationEngineTest {
         val criterion = MadjoCriterion(MadjoDimension.STOCK, "stock", "available", MadjoCriterionKind.ABSOLUTE_CONSTRAINT, MadjoCriterionSource.INITIAL_REQUEST)
         val result = MadjoRecommendationEngine.recommend(profiles, MadjoRecommendationCriteria(listOf(criterion)))
         assertEquals(listOf(greenChinaFloral.id), result.recommendations.map { it.tea.id })
-        assertTrue(result.recommendations.single().explanation.contains("Disponible en stock"))
+        assertFalse(result.recommendations.single().explanation.contains("stock", ignoreCase = true))
     }
 
     @Test fun stockPreferencePromotesAvailableTeaWithoutExcludingTheOthers() {
@@ -169,15 +169,34 @@ class MadjoRecommendationEngineTest {
         assertEquals(2, result.recommendations.size)
     }
 
-    @Test fun withoutStockConstraintAllStatusesRemainVisibleAndAreExplained() {
+    @Test fun withoutStockConstraintAllStatusesRemainVisibleWithoutStockChatter() {
         val result = MadjoRecommendationEngine.recommend(
             listOf(greenChinaFloral, blackJapanFruity, greenChinaUnknownStock),
             MadjoRecommendationCriteria(emptyList()),
         )
         assertEquals(3, result.recommendations.size)
-        assertTrue(result.recommendations.any { it.explanation.contains("Disponible en stock") })
-        assertTrue(result.recommendations.any { it.explanation.contains("Épuisé") })
-        assertTrue(result.recommendations.any { it.explanation.contains("Stock inconnu") })
+        assertTrue(result.recommendations.all { !it.explanation.contains("stock", ignoreCase = true) && !it.explanation.contains("épuisé", ignoreCase = true) })
+    }
+
+    @Test fun duplicateCriteriaProduceOnlyOneJustification() {
+        val criterion = criterion(MadjoDimension.TYPE_COLOR, "category", "GREEN", green, MadjoCriterionKind.ABSOLUTE_CONSTRAINT)
+        val result = MadjoRecommendationEngine.recommend(listOf(greenChinaFloral), MadjoRecommendationCriteria(listOf(criterion, criterion)))
+            .recommendations.single()
+        assertEquals(1, result.explanation.windowed("Thé vert".length).count { it == "Thé vert" })
+    }
+
+    @Test fun specializationExplanationKeepsTheUsersOriginalExpression() {
+        val berries = MadjoReference("berries", "BERRIES", "Baies")
+        val criterion = MadjoCriterion(
+            MadjoDimension.AROMA, "aroma", "FRUITY", MadjoCriterionKind.PREFERENCE,
+            MadjoCriterionSource.USER_ANSWER, displayValue = "Fruité", matchedText = "Fruits secs",
+            semanticExpansions = listOf(MadjoSemanticAlternative("berries", "Baies", setOf("BERRIES"), berries.id, MadjoRelation.SPECIALIZATION, "AROMA", "aroma", "BERRIES")),
+            provenance = MadjoCriterionProvenance(MadjoCriterionSource.USER_ANSWER, "Fruits secs", "fruity", "Fruité", MadjoCriterionTransformation.DIRECT),
+        )
+        val profile = tea("dried-fruit", "Thé aux baies", green, aromas = listOf(berries))
+        val explanation = MadjoRecommendationEngine.recommend(listOf(profile), MadjoRecommendationCriteria(listOf(criterion))).recommendations.single().explanation
+        assertTrue(explanation.contains("Fruits secs"))
+        assertFalse(explanation.contains("recherche de « Fruité »"))
     }
 
     @Test fun requestedBestTeasUseTasteRatingAsAnImportantSortFactor() {

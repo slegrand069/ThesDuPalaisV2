@@ -159,7 +159,7 @@ class SemanticDictionaryTest {
         val outcome = MadjoRecommendationEngine.recommend(listOf(tea), state.criteria)
         assertTrue("${state.criteria} -> $outcome", outcome.recommendations.isNotEmpty())
         val recommendation = outcome.recommendations.single()
-        assertTrue(recommendation.explanation.contains("Ses notes de « Fruits des bois » correspondent à ta recherche de « Fruité »."))
+        assertTrue(recommendation.explanation.contains("Ses notes de « Fruits des bois » correspondent à ta recherche de « fruité »."))
         assertEquals(MadjoCriterionTransformation.SPECIALIZATION, recommendation.explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SPECIALIZATION }.transformation)
         assertEquals("fruité", recommendation.explanationEvidence.single { it.transformation == MadjoCriterionTransformation.SPECIALIZATION }.userExpression)
     }
@@ -226,7 +226,7 @@ class SemanticDictionaryTest {
         assertEquals("agrumes", trace.userExpression)
         assertEquals("Agrumes", trace.interpretedLabel)
         assertEquals("Citron", trace.teaCharacteristic)
-        assertTrue(result.explanation.contains("recherche de « Agrumes »"))
+        assertTrue(result.explanation.contains("recherche de « agrumes »"))
         assertFalse(result.explanation.contains("tu as demandé du citron", ignoreCase = true))
     }
 

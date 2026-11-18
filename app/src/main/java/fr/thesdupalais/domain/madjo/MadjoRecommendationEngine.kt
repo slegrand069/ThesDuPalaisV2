@@ -335,8 +335,9 @@ object MadjoRecommendationEngine {
         val requested = criteria.criteria.filterNot { criterion ->
             criterion.dimension == MadjoDimension.TYPE_COLOR && criterion.concept == "beverage_type"
         }.filter { criterion ->
-            matches(tea, criterion) || criterion.concept == "taste_rating" && criterion.value == "top_rated" && tea.tasteRating != null
-        }
+            criterion.dimension != MadjoDimension.STOCK &&
+                (matches(tea, criterion) || criterion.concept == "taste_rating" && criterion.value == "top_rated" && tea.tasteRating != null)
+        }.distinctBy(::criterionKey)
         val evidence = mutableListOf<MadjoExplanationEvidence>()
         val sentences = mutableListOf<String>()
 
@@ -389,19 +390,12 @@ object MadjoRecommendationEngine {
                 teaCharacteristic = tea.categoryLabel,
             )
         }
-        val askedTopRated = criteria.criteria.any { it.concept == "taste_rating" && it.value == "top_rated" }
-        if (tea.tasteRating != null && (askedTopRated || criteria.criteria.any { it.dimension == MadjoDimension.TASTE_RATING } || tea.tasteRating >= 8.0)) {
+        val askedForRating = criteria.criteria.any { it.dimension == MadjoDimension.TASTE_RATING }
+        if (tea.tasteRating != null && askedForRating) {
             val rating = "${formatRating(tea.tasteRating)}/10"
             sentences += "Noté $rating."
             evidence += MadjoExplanationEvidence(null, null, null, null, MadjoCriterionTransformation.DESCRIPTION, rating)
         }
-        val stockDescription = when (tea.stockState) {
-            MadjoStockState.AVAILABLE -> "Disponible en stock"
-            MadjoStockState.OUT_OF_STOCK -> "Épuisé"
-            MadjoStockState.UNKNOWN -> "Stock inconnu"
-        }
-        sentences += "$stockDescription."
-        evidence += MadjoExplanationEvidence(null, null, null, null, MadjoCriterionTransformation.DESCRIPTION, stockDescription)
         criteria.criteria.filter { it.dimension == MadjoDimension.TASTING_HISTORY && matches(tea, it) }.forEach { criterion ->
             when (criterion.concept) {
                 "tasting_frequency" -> sentences += "Dégusté ${tea.tastingCount} fois selon ton historique."
@@ -409,7 +403,9 @@ object MadjoRecommendationEngine {
             }
         }
         if (sentences.isEmpty()) sentences += "Voici une suggestion pour toi."
-        return sentences.joinToString(" ") to evidence
+        return sentences.distinct().joinToString(" ") to evidence.distinctBy {
+            listOf(it.source, it.interpretedConceptId, it.transformation, it.teaCharacteristic, it.associationId).joinToString("|")
+        }
     }
 
     private fun characteristic(tea: MadjoTeaProfile, criterion: MadjoCriterion): Pair<String, MadjoCriterionTransformation>? {
@@ -470,16 +466,20 @@ object MadjoRecommendationEngine {
         val requestedPhrase = expression?.takeIf(String::isNotBlank) ?: interpreted
         val requested = when (transformation) {
             MadjoCriterionTransformation.SPECIALIZATION -> when (dimension) {
-                MadjoDimension.AROMA -> "Ses notes de « $actual » correspondent à ta recherche de « $interpreted »."
-                MadjoDimension.TYPE_COLOR -> "Le type « $actual » correspond à ta recherche de « $interpreted » par spécialisation."
-                else -> "« $actual » correspond à ta recherche de « $interpreted » par spécialisation."
+                MadjoDimension.AROMA -> "Ses notes de « $actual » correspondent à ta recherche de « $requestedPhrase »."
+                MadjoDimension.TYPE_COLOR -> "Le type « $actual » correspond à ta recherche de « $requestedPhrase »."
+                else -> "« $actual » correspond à ta recherche de « $requestedPhrase »."
             }
             MadjoCriterionTransformation.SYNONYM -> when (dimension) {
                 MadjoDimension.AROMA -> "Son profil « $actual » correspond à ta recherche formulée « $requestedPhrase »."
                 else -> "« $actual » correspond à ta recherche formulée « $requestedPhrase »."
             }
             else -> when (dimension) {
-                MadjoDimension.TYPE_COLOR -> if (source == MadjoCriterionSource.USER_ANSWER) "Tu as choisi « $actual »." else "« $actual », comme tu le souhaites."
+                MadjoDimension.TYPE_COLOR -> when {
+                    source == MadjoCriterionSource.USER_ANSWER -> "Tu as précisé « $requestedPhrase »."
+                    normalize(requestedPhrase) == normalize(actual) -> "$actual, conformément à ta demande."
+                    else -> "$actual correspond à ta demande de « $requestedPhrase »."
+                }
                 MadjoDimension.AROMA -> "Ses notes aromatiques (« $actual ») correspondent à ta recherche de « $requestedPhrase »."
                 MadjoDimension.ORIGIN -> "Son origine (« $actual ») correspond à ta recherche."
                 MadjoDimension.MOMENT -> "Le moment (« $actual ») correspond à ta recherche."

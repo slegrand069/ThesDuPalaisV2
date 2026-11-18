@@ -47,10 +47,21 @@ data class PurchaseSuggestion(
     val tastingCount: Int,
 )
 
-data class MonthlyTastingCount(val month: YearMonth, val count: Int) {
+data class MonthlyTastingCount(val month: YearMonth, val count: Int, val segments: List<MonthlyTastingSegment> = emptyList()) {
     val label: String get() = month.month.getDisplayName(TextStyle.SHORT, Locale.FRANCE)
         .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.FRANCE) else it.toString() }
 }
+data class MonthlyTastingSegment(val colorKey: String, val label: String, val count: Int)
+
+/** Proportional bar height using a small headroom above the largest displayed interval. */
+internal fun monthlyBarHeightFraction(count: Int, maximum: Int): Float =
+    if (count <= 0 || maximum <= 0) 0f else count.toFloat() / (maximum.toFloat() * 1.08f)
+
+internal fun compactMonthlyLegendLabel(label: String): String = label
+    .replace(Regex("(?i)(?<![\\p{L}\\p{N}])thé(?![\\p{L}])\\s*"), "")
+    .replace(Regex("\\s*\\+\\s*"), " + ")
+    .trim()
+    .ifBlank { label }
 
 data class StatisticsSnapshot(
     val period: StatisticsPeriod,
@@ -60,6 +71,7 @@ data class StatisticsSnapshot(
     val lowStockCount: Int,
     val tastingEventCount: Int,
     val tastingsByColor: List<StatisticsBucket>,
+    val tastingsByCountry: List<StatisticsBucket>,
     val stockByColor: List<StatisticsBucket>,
     val stockByCountry: List<StatisticsBucket>,
     val stockByBadge: List<StatisticsBucket>,
@@ -104,12 +116,12 @@ fun buildStatisticsSnapshot(
         tea.tastingDatesEpochMillis.filter(::isInPeriod).map { tea.category }
     }.groupingBy(StatisticsReference::id).eachCount().mapNotNull { (id, count) ->
         val reference = teas.firstOrNull { it.category.id == id }?.category ?: return@mapNotNull null
-        StatisticsBucket(id.toString(), reference.label, count.toLong(), reference.semanticKey)
+        StatisticsBucket(id.toString(), reference.label, count.toLong(), categoryColorKey(reference))
     }.sortedWith(bucketValueComparator())
 
-    val stockByColor = groupStock(active) { listOf(it.category) }
-    val stockByCountry = groupStock(active) { tea -> tea.countries.ifEmpty { listOf(UNKNOWN_ORIGIN) } }
-    val stockByBadge = groupStock(active) { tea -> tea.badges.ifEmpty { listOf(NO_BADGE) } }
+    val stockByColor = groupStock(active, { listOf(it.category) }, ::categoryColorKey)
+    val stockByCountry = groupStock(active, references = { tea -> listOf(originBucket(tea.countries)) })
+    val stockByBadge = groupStock(active, references = { tea -> tea.badges.ifEmpty { listOf(NO_BADGE) } })
 
     val monthStart = YearMonth.from(today).minusMonths(5)
     val months = (0L..5L).map { monthStart.plusMonths(it) }
@@ -119,12 +131,17 @@ fun buildStatisticsSnapshot(
         val count = if (to <= startInclusive || from >= endExclusive) 0 else teas.sumOf { tea ->
             tea.tastingDatesEpochMillis.count { epoch -> isInPeriod(epoch) && epoch >= from && epoch < to }
         }
-        MonthlyTastingCount(month, count)
+        val segments = teas.flatMap { tea ->
+            tea.tastingDatesEpochMillis.filter { epoch -> isInPeriod(epoch) && epoch >= from && epoch < to }
+                .map { categoryColorKey(tea.category) }
+        }.groupingBy { it }.eachCount().entries.sortedBy { it.key }
+            .map { MonthlyTastingSegment(it.key, teas.firstOrNull { tea -> categoryColorKey(tea.category) == it.key }?.category?.label ?: it.key, it.value) }
+        MonthlyTastingCount(month, count, segments)
     }
 
     val suggestions = active.mapNotNull { tea ->
         val stock = tea.stockMilliGrams ?: return@mapNotNull null
-        if (stock >= LOW_STOCK_LIMIT_MILLI_GRAMS) return@mapNotNull null
+        if (stock >= LOW_STOCK_LIMIT_MILLI_GRAMS || tea.statusSemanticKey.equals("AVOID", ignoreCase = true)) return@mapNotNull null
         PurchaseSuggestion(tea.id, tea.name, stock, tastingCounts[tea.id] ?: 0)
     }.sortedWith(compareBy<PurchaseSuggestion> { it.stockMilliGrams }
         .then(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
@@ -144,6 +161,13 @@ fun buildStatisticsSnapshot(
         lowStockCount = active.count { it.stockMilliGrams != null && it.stockMilliGrams < LOW_STOCK_LIMIT_MILLI_GRAMS },
         tastingEventCount = eventCount,
         tastingsByColor = tastingsByColor,
+        tastingsByCountry = teas.flatMap { tea ->
+            val bucket = originBucket(tea.countries)
+            tea.tastingDatesEpochMillis.filter(::isInPeriod).map { bucket }
+        }.groupingBy { it.id }.eachCount().mapNotNull { (id, count) ->
+            val reference = teas.asSequence().map { originBucket(it.countries) }.firstOrNull { it.id == id } ?: return@mapNotNull null
+            StatisticsBucket(id.toString(), reference.label, count.toLong(), reference.semanticKey)
+        }.sortedWith(bucketValueComparator()),
         stockByColor = stockByColor,
         stockByCountry = stockByCountry,
         stockByBadge = stockByBadge,
@@ -156,19 +180,61 @@ fun buildStatisticsSnapshot(
 private fun groupStock(
     teas: List<StatisticsTea>,
     references: (StatisticsTea) -> List<StatisticsReference>,
+    colorKey: (StatisticsReference) -> String = { it.semanticKey ?: it.id.toString() },
 ): List<StatisticsBucket> = teas.asSequence()
     .filter { it.stockMilliGrams != null }
     .flatMap { tea -> references(tea).map { it to requireNotNull(tea.stockMilliGrams) } }
     .groupBy({ it.first.id }, { it.second })
     .map { (id, amounts) ->
         val reference = teas.asSequence().flatMap { references(it).asSequence() }.first { it.id == id }
-        StatisticsBucket(id.toString(), reference.label, amounts.sum(), reference.semanticKey)
+        StatisticsBucket(id.toString(), reference.label, amounts.sum(), colorKey(reference))
     }
     .sortedWith(bucketValueComparator())
 
 private fun bucketValueComparator() = compareByDescending<StatisticsBucket> { it.value }
     .then(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }).thenBy { it.id }
 
-private val UNKNOWN_ORIGIN = StatisticsReference(UUID(0L, 1L), "Non renseigné", null)
+private fun categoryColorKey(reference: StatisticsReference): String {
+    val label = normalizeOrigin(reference.label)
+    return when (label) {
+        "the vert", "vert" -> "GREEN"
+        "the noir", "noir" -> "BLACK"
+        "the jaune", "jaune" -> "YELLOW"
+        "oolong" -> "OOLONG"
+        "the blanc", "blanc" -> "WHITE"
+        "mixte", "melange" -> "MIXED"
+        "puerh", "pu erh", "pu er h" -> "PU_ERH"
+        "the sombre", "sombre" -> "DARK"
+        "infusion", "tisane" -> "INFUSION"
+        "mate" -> "MATE"
+        else -> reference.semanticKey ?: reference.id.toString()
+    }
+}
+
+private val UNKNOWN_ORIGIN = StatisticsReference(UUID(0L, 1L), "Non renseigné", "ORIGIN_UNKNOWN")
+private val MULTIPLE_ORIGINS = StatisticsReference(UUID(0L, 3L), "Origines multiples", "ORIGIN_MULTIPLE")
+private val NC_ORIGIN = StatisticsReference(UUID(0L, 4L), "NC / non communiqué", "ORIGIN_NC")
 private val NO_BADGE = StatisticsReference(UUID(0L, 2L), "Sans badge", null)
 private const val LOW_STOCK_LIMIT_MILLI_GRAMS = 30_000L
+
+private fun originBucket(countries: List<StatisticsReference>): StatisticsReference {
+    val distinct = countries.distinctBy { it.id }
+    if (distinct.isEmpty()) return UNKNOWN_ORIGIN
+    if (distinct.size > 1) return MULTIPLE_ORIGINS
+    val country = distinct.single()
+    val normalized = normalizeOrigin(country.label)
+    if (normalized in setOf("nc", "n c", "non communique", "non communiquee", "non renseigne", "non renseignee")) return NC_ORIGIN
+    val key = when (normalized) {
+        "chine" -> "COUNTRY_CHINA"
+        "japon" -> "COUNTRY_JAPAN"
+        "inde" -> "COUNTRY_INDIA"
+        "vietnam" -> "COUNTRY_VIETNAM"
+        "afrique du sud" -> "COUNTRY_SOUTH_AFRICA"
+        else -> "COUNTRY_${normalized.uppercase(Locale.ROOT).replace(' ', '_')}"
+    }
+    return country.copy(semanticKey = key)
+}
+
+private fun normalizeOrigin(value: String) = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+    .replace(Regex("\\p{Mn}+"), "").lowercase(Locale.ROOT)
+    .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
