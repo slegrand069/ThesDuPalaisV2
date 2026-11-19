@@ -6,6 +6,8 @@ import fr.thesdupalais.data.backup.BackupTargetStateBuilder
 import fr.thesdupalais.data.backup.BackupTargetFingerprints
 import fr.thesdupalais.data.backup.TargetOperation
 import fr.thesdupalais.data.backup.TargetPhotoRecord
+import fr.thesdupalais.data.backup.TargetArticleImage
+import fr.thesdupalais.data.backup.TargetArticleRecord
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -67,11 +69,11 @@ class DurableBackupOperationJournal(
         fingerprints: BackupTargetFingerprints,
     ): DurableOperationEntry {
         requireCanonicalUuid(operationId)
-        require(selectedSets.isNotEmpty() && selectedSets.all { it in setOf("teas", "configuration") }) {
+        require(selectedSets.isNotEmpty() && selectedSets.all { it in setOf("teas", "configuration", "articles") }) {
             "Sélection d’ensembles invalide pour une opération durable."
         }
         require(archiveBytes.size.toLong() <= BackupArchiveValidator.MAX_ARCHIVE_BYTES) { "Archive trop volumineuse pour le journal." }
-        BackupArchiveValidator.validate(archiveBytes)
+        val validatedArchive = BackupArchiveValidator.validate(archiveBytes)
         require(sha256(archiveBytes) == fingerprints.archiveSha256) { "L’archive ne correspond pas au plan confirmé." }
         listOf(fingerprints.archiveSha256, fingerprints.localSnapshotSha256, fingerprints.operationSha256, fingerprints.targetSha256)
             .forEach { require(it.matches(Regex("[0-9a-f]{64}"))) { "Empreinte SHA-256 invalide." } }
@@ -124,10 +126,18 @@ class DurableBackupOperationJournal(
             faultInjector.hit(PreparationFaultPoint.AFTER_ARCHIVE_COPY)
             writeAtomically(File(operationDir, TARGET_NAME), targetBytes)
             faultInjector.hit(PreparationFaultPoint.AFTER_TARGET_COPY)
+            val articleImageImports = target.articleRecords.flatMap { article -> article.images.filter { it.archivePath != null }.map { image ->
+                val imageBytes = validatedArchive.entries[image.archivePath]
+                    ?: throw IOException("Image d’article absente de l’archive : ${image.archivePath}.")
+                if (imageBytes.size.toLong() != image.sizeBytes || sha256(imageBytes) != image.sha256) {
+                    throw IOException("Taille ou empreinte d’image d’article incohérente : ${image.archivePath}.")
+                }
+                TargetPhotoRecord(image.id, image.articleId, image.relativePath, 0, false, image.archivePath)
+            } }
             val stagedMedia = if (existing?.mediaArtifacts?.isNotEmpty() == true) {
                 verifyMediaArtifacts(operationDir, existing.mediaArtifacts)
                 existing.mediaArtifacts
-            } else stageMedia(operationDir, target.photosToQuarantine, target.photosToKeep.filter { it.archivePath != null }, archiveBytes)
+            } else stageMedia(operationDir, target.photosToQuarantine, target.photosToKeep.filter { it.archivePath != null } + articleImageImports, archiveBytes)
             entry = entry.copy(mediaArtifacts = stagedMedia)
             writeEntry(operationDir, entry)
             verifyArtifacts(entry)
@@ -252,14 +262,15 @@ class DurableBackupOperationJournal(
         if (BackupTargetStateBuilder.fingerprintTargetState(decodedTarget) != entry.targetFingerprint) {
             throw IOException("L’état cible durable ne correspond pas à l’empreinte confirmée.")
         }
-        val expectedPhotos = (decodedTarget.photosToQuarantine.map { it.id to (it.relativePath to false) } +
-            decodedTarget.photosToKeep.filter { it.archivePath != null }.map { it.id to (it.relativePath to true) }).toMap()
-        if (expectedPhotos.size != decodedTarget.photosToQuarantine.size + decodedTarget.photosToKeep.count { it.archivePath != null } ||
-            expectedPhotos.keys != entry.mediaArtifacts.map { it.photoId }.toSet()) {
-            throw IOException("Les fichiers médias préparés ne correspondent pas aux photos à restaurer ou mettre en quarantaine.")
+        val importedArticles = decodedTarget.articleRecords.flatMap { row -> row.images.filter { it.archivePath != null }.map { it.id to (it.relativePath to true) } }
+        val expectedMedia = (decodedTarget.photosToQuarantine.map { it.id to (it.relativePath to false) } +
+            decodedTarget.photosToKeep.filter { it.archivePath != null }.map { it.id to (it.relativePath to true) } + importedArticles).toMap()
+        if (expectedMedia.size != decodedTarget.photosToQuarantine.size + decodedTarget.photosToKeep.count { it.archivePath != null } + importedArticles.size ||
+            expectedMedia.keys != entry.mediaArtifacts.map { it.photoId }.toSet()) {
+            throw IOException("Les fichiers médias préparés ne correspondent pas aux médias cibles.")
         }
         entry.mediaArtifacts.forEach { artifact ->
-            val expected = expectedPhotos[artifact.photoId] ?: throw IOException("Photo préparée sans cible.")
+            val expected = expectedMedia[artifact.photoId] ?: throw IOException("Média préparé sans cible.")
             if (expected.first != artifact.sourceRelativePath || expected.second != artifact.imported) throw IOException("Chemin source de média incohérent.")
         }
         verifyMediaArtifacts(dir, entry.mediaArtifacts)
@@ -371,11 +382,24 @@ class DurableBackupOperationJournal(
             quarantine.put(JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("relativePath", photo.relativePath).put("position", photo.position)
                 .put("isPrimary", photo.isPrimary).put("archivePath", photo.archivePath ?: JSONObject.NULL))
         }
+        val articles = JSONArray()
+        target.articleRecords.forEach { article ->
+            val images = JSONArray()
+            article.images.forEach { image ->
+                images.put(JSONObject().put("id", image.id).put("articleId", image.articleId).put("relativePath", image.relativePath)
+                    .put("archivePath", image.archivePath ?: JSONObject.NULL).put("sizeBytes", image.sizeBytes).put("sha256", image.sha256))
+            }
+            articles.put(JSONObject().put("id", article.id).put("title", article.title).put("category", article.category)
+                .put("markdown", article.markdown).put("images", images))
+        }
         return JSONObject()
             .put("targetFormat", TARGET_FORMAT)
             .put("payloads", payloads)
             .put("photosToKeep", photos)
             .put("photosToQuarantine", quarantine)
+            .put("articlesIncluded", target.articlesIncluded)
+            .put("replaceArticles", target.replaceArticles)
+            .put("articleRecords", articles)
             .put("supersededImportDatasetIds", JSONArray(target.supersededImportDatasetIds.sorted()))
             .toString().toByteArray(StandardCharsets.UTF_8)
     }
@@ -400,7 +424,7 @@ class DurableBackupOperationJournal(
             try {
                 val importedBytes = if (imported) {
                     val path = photo.archivePath ?: throw IOException("Référence à l’image d’archive absente.")
-                    if (path != "photos/${photo.id}.jpg") throw IOException("Référence à l’image d’archive non sûre.")
+                    if (path != "photos/${photo.id}.jpg" && !path.startsWith("articles/media/")) throw IOException("Référence à l’image d’archive non sûre.")
                     archive.entries[path] ?: throw IOException("Image absente de l’archive : $path.")
                 } else null
                 if (importedBytes != null) {
@@ -474,7 +498,9 @@ class DurableBackupOperationJournal(
     private fun decodeTarget(bytes: ByteArray): BackupTargetState {
         try {
             val root = JSONObject(String(bytes, StandardCharsets.UTF_8))
-            if (root.keys().asSequence().toSet() != setOf("targetFormat", "payloads", "photosToKeep", "photosToQuarantine", "supersededImportDatasetIds")) {
+            val oldKeys = setOf("targetFormat", "payloads", "photosToKeep", "photosToQuarantine", "supersededImportDatasetIds")
+            val currentKeys = oldKeys + setOf("articlesIncluded", "replaceArticles", "articleRecords")
+            if (root.keys().asSequence().toSet() !in setOf(oldKeys, currentKeys)) {
                 throw IOException("Propriétés de l’état cible absentes ou inconnues.")
             }
             if (root.getString("targetFormat") != TARGET_FORMAT) throw IOException("Format d’état cible non pris en charge.")
@@ -493,10 +519,24 @@ class DurableBackupOperationJournal(
             }
             val photos = readPhotos("photosToKeep")
             val quarantine = readPhotos("photosToQuarantine")
+            val articleRecords = if (root.has("articleRecords")) {
+                val rows = root.getJSONArray("articleRecords")
+                (0 until rows.length()).map { i ->
+                    val article = rows.getJSONObject(i)
+                    val images = article.getJSONArray("images")
+                    val parsedImages = (0 until images.length()).map { j ->
+                        val image = images.getJSONObject(j)
+                        TargetArticleImage(image.getString("id"), image.getString("articleId"), image.getString("relativePath"),
+                            if (image.isNull("archivePath")) null else image.getString("archivePath"), image.getLong("sizeBytes"), image.getString("sha256"))
+                    }
+                    TargetArticleRecord(article.getString("id"), article.getString("title"), article.getString("category"), article.getString("markdown"), parsedImages)
+                }
+            } else emptyList()
             val markers = root.getJSONArray("supersededImportDatasetIds")
             val superseded = (0 until markers.length()).map { markers.getString(it) }.toSet()
             if (superseded.size != markers.length()) throw IOException("Marqueur d’import répété dans l’état cible.")
-            return BackupTargetState(payloads, photos, superseded, quarantine)
+            return BackupTargetState(payloads, photos, superseded, quarantine, articleRecords,
+                root.optBoolean("articlesIncluded", false), root.optBoolean("replaceArticles", false))
         } catch (error: IOException) { throw error }
         catch (error: Exception) { throw IOException("État cible durable corrompu.", error) }
     }

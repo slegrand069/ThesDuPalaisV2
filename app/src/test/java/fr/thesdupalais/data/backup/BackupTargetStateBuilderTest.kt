@@ -55,13 +55,28 @@ class BackupTargetStateBuilderTest {
         assertEquals(setOf("teas", "configuration"), changedSelection.selectedSets)
     }
 
-    @Test fun replacementPreviewRejectsArticlesAsAnApplicableSelection() {
+    @Test fun replacementPreviewAcceptsArticlesOnlyAndDoesNotChangeCollectionPayloads() {
         val bytes = archive(emptySnapshot(), setOf(BackupExportSet.ARTICLES))
         val localBytes = archive(emptySnapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
         val local = BackupLocalOperationSnapshot(localBytes, emptyList(), emptyList())
-        assertThrows(IllegalArgumentException::class.java) {
-            BackupReplacementPreviewPlanner.plan(bytes, local, setOf("articles"))
-        }
+        val plan = BackupReplacementPreviewPlanner.plan(bytes, local, setOf("articles"))
+        assertTrue(plan.target.applicable)
+        assertTrue(plan.target.state!!.replaceArticles)
+        assertEquals(emptyList<TargetArticleRecord>(), plan.target.state!!.articleRecords)
+        assertEquals(setOf("data/teas.json", "data/configuration.json"), plan.target.state!!.payloads.keys)
+    }
+
+    @Test fun omittingArticlesFromSelectionLeavesTheArticleSetOutOfTheTarget() {
+        val articleId = "123e4567-e89b-12d3-a456-426614174099"
+        val localBytes = archive(snapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val incoming = archive(emptySnapshot(), setOf(BackupExportSet.TEAS, BackupExportSet.ARTICLES))
+        val existing = TargetArticleRecord(articleId, "Existing", "Savoirs", "# Existing")
+        val local = BackupLocalOperationSnapshot(localBytes, emptyList(), emptyList(), listOf(existing))
+        val plan = BackupReplacementPreviewPlanner.plan(incoming, local, setOf("teas"))
+        assertTrue(plan.target.blockers.joinToString(), plan.target.applicable)
+        assertFalse(plan.target.state!!.replaceArticles)
+        assertFalse(plan.target.state!!.articlesIncluded)
+        assertTrue(plan.target.state!!.articleRecords.isEmpty())
     }
 
     @Test fun replacementOfBothSetsCarriesStableIdsAndEmitsDeterministicFingerprints() {

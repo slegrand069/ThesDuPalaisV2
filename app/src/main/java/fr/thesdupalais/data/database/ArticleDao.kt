@@ -18,6 +18,12 @@ interface ArticleDao {
     @Query("SELECT * FROM articles WHERE id = :id LIMIT 1")
     suspend fun findById(id: UUID): ArticleEntity?
 
+    @Query("SELECT * FROM articles ORDER BY id")
+    suspend fun allForBackup(): List<ArticleEntity>
+
+    @Query("DELETE FROM articles")
+    suspend fun deleteAllForBackup()
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(article: ArticleEntity)
 

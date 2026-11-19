@@ -161,7 +161,7 @@ class BackupMergeWorkflow(
                 onProgress(BackupMergeProgress.PREPARING)
                 writeCoordinator.withOperationPermit {
                     val fresh = exporter.captureCurrentOperationSnapshot()
-                    val freshFingerprint = BackupTargetStateBuilder.fingerprintLocalSnapshot(fresh.archiveBytes, fresh.photos, fresh.importHistory)
+                    val freshFingerprint = BackupTargetStateBuilder.fingerprintLocalSnapshot(fresh.archiveBytes, fresh.photos, fresh.importHistory, fresh.articles)
                     require(freshFingerprint == selection.target.fingerprints.localSnapshotSha256) {
                         "La collection a changé depuis la prévisualisation. Rechargez l’archive et vérifiez à nouveau les décisions."
                     }

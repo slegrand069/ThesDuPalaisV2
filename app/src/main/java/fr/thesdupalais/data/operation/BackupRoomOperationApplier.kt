@@ -22,6 +22,7 @@ import fr.thesdupalais.data.database.TeaEntity
 import fr.thesdupalais.data.database.TeaMomentEntity
 import fr.thesdupalais.data.database.TeaRegionEntity
 import fr.thesdupalais.data.database.TeaPhotoEntity
+import fr.thesdupalais.data.database.ArticleEntity
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
 import fr.thesdupalais.domain.references.ReferenceLabelNormalizer
 import java.io.IOException
@@ -80,7 +81,7 @@ class BackupRoomOperationApplier(
         val target = journal.readTargetState(entry)
         val targetErrors = BackupTargetStateBuilder.validatePreparedState(target)
         require(targetErrors.isEmpty()) { "État cible préparé incohérent : ${targetErrors.joinToString(" ")}" }
-        require(entry.selectedSets.isNotEmpty() && entry.selectedSets.all { it in setOf("teas", "configuration") }) {
+        require(entry.selectedSets.isNotEmpty() && entry.selectedSets.all { it in setOf("teas", "configuration", "articles") }) {
             "L’opération contient un ensemble non pris en charge."
         }
 
@@ -106,7 +107,7 @@ class BackupRoomOperationApplier(
                 val markerInTransaction = markerDao.findActive()
                 require(markerInTransaction == null) { "Un marqueur Room est apparu avant l’application transactionnelle." }
                 val local = exporter.captureCurrentOperationSnapshotWithinTransaction(prefsSnapshot)
-                val localFingerprint = BackupTargetStateBuilder.fingerprintLocalSnapshot(local.archiveBytes, local.photos, local.importHistory)
+                val localFingerprint = BackupTargetStateBuilder.fingerprintLocalSnapshot(local.archiveBytes, local.photos, local.importHistory, local.articles, "articles" in entry.selectedSets)
                 require(localFingerprint == entry.localSnapshotSha256) {
                     "La collection locale a changé depuis la prévisualisation ; l’opération préparée est périmée."
                 }
@@ -116,13 +117,16 @@ class BackupRoomOperationApplier(
                 }
 
                 val rows = parseTarget(target)
-                applyReferences(rows.references)
-                val changedMovementIds = removeObsoleteHistory(rows.tastings, rows.movements)
-                applyTeas(rows.teas)
-                applyAssociations(rows)
-                applyPhotos(rows.photos)
-                writeTargetHistory(rows.tastings, rows.movements, changedMovementIds)
-                deleteObsoleteReferences(rows.references.map { it.id }.toSet())
+                if (entry.selectedSets.any { it in setOf("teas", "configuration") }) {
+                    applyReferences(rows.references)
+                    val changedMovementIds = removeObsoleteHistory(rows.tastings, rows.movements)
+                    applyTeas(rows.teas)
+                    applyAssociations(rows)
+                    if ("teas" in entry.selectedSets) applyPhotos(rows.photos)
+                    writeTargetHistory(rows.tastings, rows.movements, changedMovementIds)
+                    deleteObsoleteReferences(rows.references.map { it.id }.toSet())
+                }
+                if (target.replaceArticles) applyArticles(rows.articles)
                 if (target.supersededImportDatasetIds.isNotEmpty()) {
                     database.importedDatasetDao().markSuperseded(target.supersededImportDatasetIds.map { UUID.fromString(it) })
                 }
@@ -271,6 +275,7 @@ class BackupRoomOperationApplier(
         val moments: List<TeaMomentEntity>, val badges: List<TeaBadgeEntity>, val tastings: List<TastingEntity>,
         val movements: List<StockMovementEntity>,
         val photos: List<TeaPhotoEntity>,
+        val articles: List<ArticleEntity>,
     )
 
     private fun parseTarget(target: BackupTargetState): ParsedTarget {
@@ -324,7 +329,14 @@ class BackupRoomOperationApplier(
         val photos = target.photosToKeep.map { photo ->
             TeaPhotoEntity(UUID.fromString(photo.id), UUID.fromString(photo.teaId), photo.relativePath, photo.position, photo.isPrimary)
         }
-        return ParsedTarget(references, teas, countries, regions, aromas, profiles, moments, badges, tastings, movements, photos)
+        val articles = target.articleRecords.map { row -> ArticleEntity(UUID.fromString(row.id), row.title, row.category, row.markdown) }
+        return ParsedTarget(references, teas, countries, regions, aromas, profiles, moments, badges, tastings, movements, photos, articles)
+    }
+
+    private suspend fun applyArticles(target: List<ArticleEntity>) {
+        val dao = database.articleDao()
+        dao.deleteAllForBackup()
+        target.forEach { dao.insert(it) }
     }
 
     private fun JSONObject.uuid(key: String): UUID = UUID.fromString(getString(key)).also { require(it.toString() == getString(key)) { "UUID non canonique : $key." } }

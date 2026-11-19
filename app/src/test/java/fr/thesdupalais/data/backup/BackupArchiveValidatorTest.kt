@@ -51,6 +51,21 @@ class BackupArchiveValidatorTest {
         assertThrows(BackupArchiveValidator.ValidationException::class.java) { BackupArchiveValidator.validate(archive) }
     }
 
+    @Test fun v3RejectsMarkdownIllustrationWithoutMatchingIndexFile() {
+        val id = "123e4567-e89b-12d3-a456-426614174099"
+        val mdPath = "articles/content/$id.md"
+        val index = """{"articles":[{"id":"$id","title":"A","section":"Savoirs","markdownPath":"$mdPath","illustrations":[]}]}""".toByteArray()
+        val markdown = "![feuilles](../media/$id/missing.jpg)".toByteArray()
+        val archive = zip(mapOf("articles/index.json" to index, mdPath to markdown), setOf("articles"), schemaVersion = 3)
+        assertThrows(BackupArchiveValidator.ValidationException::class.java) { BackupArchiveValidator.validate(archive) }
+    }
+
+    @Test fun v2ArticlesWithoutIllustrationsRemainValid() {
+        val index = """{"articles":[{"id":"old-article","title":"A","section":null,"markdownPath":"articles/content/a.md","illustrations":[]}]}""".toByteArray()
+        val archive = zip(mapOf("articles/index.json" to index, "articles/content/a.md" to "# A".toByteArray()), setOf("articles"), schemaVersion = 2)
+        assertEquals(2, BackupArchiveValidator.validate(archive).schemaVersion)
+    }
+
     @Test fun acceptsValidTeaDependenciesAndMatchingConfigurationReferences() {
         val refs = listOf(reference(CAT, "CATEGORY", label = "Vert"))
         val teas = teaPayload(refs, listOf(tea(id = TEA_A, category = CAT)))
@@ -132,12 +147,12 @@ class BackupArchiveValidatorTest {
         assertThrows(BackupArchiveValidator.ValidationException::class.java) { BackupArchiveValidator.validate(archive) }
     }
 
-    private fun zip(payloads: Map<String, ByteArray>, sets: Set<String>, extraManifest: String = "", wrongDigest: Boolean = false): ByteArray {
+    private fun zip(payloads: Map<String, ByteArray>, sets: Set<String>, extraManifest: String = "", wrongDigest: Boolean = false, schemaVersion: Int = 1): ByteArray {
         val entries = payloads.map { (path, bytes) ->
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-            """{"path":"$path","mediaType":"${if (path.endsWith(".md")) "text/markdown; charset=utf-8" else "application/json"}","sizeBytes":${bytes.size},"sha256":"${if (wrongDigest) "0".repeat(64) else hash}"}"""
+            """{"path":"$path","mediaType":"${when { path.endsWith(".md") -> "text/markdown; charset=utf-8"; path.endsWith(".jpg") -> "image/jpeg"; else -> "application/json" }}","sizeBytes":${bytes.size},"sha256":"${if (wrongDigest) "0".repeat(64) else hash}"}"""
         }.joinToString(",")
-        val text = """{"format":"${BackupArchiveValidator.FORMAT}","schemaVersion":1,"backupId":"123e4567-e89b-12d3-a456-426614174000","createdAt":"2026-11-11T12:00:00Z","producer":{"application":"ThésDuPalais","version":"1.0"},"includedSets":[${sets.joinToString(",") { "\"$it\"" }}],$extraManifest"entries":[$entries]}"""
+        val text = """{"format":"${BackupArchiveValidator.FORMAT}","schemaVersion":$schemaVersion,"backupId":"123e4567-e89b-12d3-a456-426614174000","createdAt":"2026-11-11T12:00:00Z","producer":{"application":"ThésDuPalais","version":"1.0"},"includedSets":[${sets.joinToString(",") { "\"$it\"" }}],$extraManifest"entries":[$entries]}"""
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { zip ->
             zip.putNextEntry(ZipEntry("manifest.json")); zip.write(text.toByteArray()); zip.closeEntry()

@@ -16,11 +16,13 @@ import org.json.JSONTokener
 object BackupArchiveValidator {
     const val FORMAT = "thesdupalais.backup"
     const val LEGACY_SCHEMA_VERSION = 1
-    const val SCHEMA_VERSION = 2
+    const val PHOTO_SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 3
     const val MAX_ARCHIVE_BYTES = 50L * 1024 * 1024
     const val MAX_EXPANDED_BYTES = 150L * 1024 * 1024
     const val MAX_IMAGE_BYTES = 10L * 1024 * 1024
     const val MAX_IMAGE_DIMENSION = 4096
+    const val MAX_ENTRIES = 512
     private const val MAX_MANIFEST_BYTES = 1024 * 1024
     private val sets = setOf("teas", "configuration", "articles")
     private val hex = Regex("[0-9a-f]{64}")
@@ -41,6 +43,7 @@ object BackupArchiveValidator {
     fun validate(archiveBytes: ByteArray): ValidatedArchive {
         if (archiveBytes.size.toLong() > MAX_ARCHIVE_BYTES) fail("$", "Archive exceeds 50 MiB compressed limit.")
         val files = linkedMapOf<String, ByteArray>()
+        val normalizedEntryPaths = mutableSetOf<String>()
         var expanded = 0L
         try {
             ZipInputStream(ByteArrayInputStream(archiveBytes)).use { zip ->
@@ -49,6 +52,8 @@ object BackupArchiveValidator {
                     val name = entry.name
                     validatePath(name, "ZIP entry")
                     if (entry.isDirectory) { zip.closeEntry(); continue }
+                    if (files.size >= MAX_ENTRIES) fail(name, "Archive contains too many files.")
+                    if (!normalizedEntryPaths.add(name.lowercase(Locale.ROOT))) fail(name, "Duplicate ZIP path (case-insensitive).")
                     if (files.containsKey(name)) fail(name, "Duplicate ZIP path.")
                     val out = ByteArrayOutputStream()
                     val buffer = ByteArray(8192)
@@ -113,7 +118,7 @@ object BackupArchiveValidator {
             val actualDigest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(Locale.ROOT, it) }
             if (actualDigest != d.sha256) fail(d.path, "SHA-256 mismatch.")
             if (d.path.startsWith("photos/")) {
-                if (schemaVersion < SCHEMA_VERSION || "teas" !in included) fail(d.path, "Tea photos require backup v2 and the teas set.")
+                if (schemaVersion < PHOTO_SCHEMA_VERSION || "teas" !in included) fail(d.path, "Tea photos require backup v2 and the teas set.")
                 if (d.mediaType != "image/jpeg") fail(d.path, "Tea photos must be JPEG images.")
                 validateImage(d.path, d.mediaType, bytes)
             } else if (d.path.startsWith("articles/media/")) {
@@ -123,7 +128,7 @@ object BackupArchiveValidator {
                 if (d.mediaType != "application/json") fail(d.path, "Expected application/json media type.")
                 val json = parseObject(bytes, d.path)
                 when (d.path) {
-                    "data/teas.json" -> validateTeasShape(json, schemaVersion >= SCHEMA_VERSION)
+                    "data/teas.json" -> validateTeasShape(json, schemaVersion >= PHOTO_SCHEMA_VERSION)
                     "data/configuration.json" -> validateConfigurationShape(json)
                 }
             } else if (d.path.endsWith(".md")) {
@@ -137,9 +142,9 @@ object BackupArchiveValidator {
         if (teasPayload != null) validateWithCollectionRules(teasPayload, "teas")
         if (configPayload != null) validateWithCollectionRules(configPayload, "configuration")
         if (teasPayload != null && configPayload != null) validateReferenceSetCollisions(teasPayload, configPayload)
-        if (teasPayload != null && schemaVersion >= SCHEMA_VERSION) validateTeaPhotos(teasPayload, files)
-        if ("articles" in included) validateArticles(parseObject(files.getValue("articles/index.json"), "articles/index.json"), files)
-        if (schemaVersion < SCHEMA_VERSION && files.keys.any { it.startsWith("photos/") }) fail("ZIP", "Legacy v1 archive cannot contain tea photo files.")
+        if (teasPayload != null && schemaVersion >= PHOTO_SCHEMA_VERSION) validateTeaPhotos(teasPayload, files)
+        if ("articles" in included) validateArticles(parseObject(files.getValue("articles/index.json"), "articles/index.json"), files, schemaVersion)
+        if (schemaVersion < PHOTO_SCHEMA_VERSION && files.keys.any { it.startsWith("photos/") }) fail("ZIP", "Legacy v1 archive cannot contain tea photo files.")
         return ValidatedArchive(backupId, schemaVersion, createdAt, included.toSet(), files.filterKeys { it != "manifest.json" })
     }
 
@@ -258,7 +263,7 @@ object BackupArchiveValidator {
             )
         }
 
-    private fun validateArticles(index: JSONObject, files: Map<String, ByteArray>) {
+    private fun validateArticles(index: JSONObject, files: Map<String, ByteArray>, schemaVersion: Int) {
         strictKeys(index, setOf("articles"), "articles/index.json")
         val ids = mutableSetOf<String>(); val referenced = mutableSetOf("articles/index.json")
         val rows = array(index, "articles", "articles/index.json")
@@ -274,6 +279,7 @@ object BackupArchiveValidator {
             val md = string(row, "markdownPath", path); validatePath(md, "$path.markdownPath")
             if (!md.startsWith("articles/content/") || !md.endsWith(".md")) fail("$path.markdownPath", "Markdown must be under articles/content and end in .md.")
             if (!referenced.add(md)) fail("$path.markdownPath", "Duplicate article content path.")
+            val illustrationPaths = mutableSetOf<String>()
             val illustrations = array(row, "illustrations", path)
             illustrations.forEachIndexed { j, rawImage ->
                 val ip = "$path.illustrations[$j]"; val image = rawImage as? JSONObject ?: fail(ip, "Object required.")
@@ -282,6 +288,20 @@ object BackupArchiveValidator {
                 if (!imagePath.startsWith("articles/media/")) fail("$ip.path", "Illustration must be under articles/media.")
                 val alt = image.opt("alt"); if (alt !== JSONObject.NULL && alt !is String) fail("$ip.alt", "String or null required.")
                 if (!referenced.add(imagePath)) fail("$ip.path", "Duplicate illustration path.")
+                illustrationPaths += imagePath
+            }
+            if (schemaVersion >= SCHEMA_VERSION) {
+                val markdown = validateUtf8(files[md] ?: fail(md, "Article Markdown is missing."), md)
+                val localImages = Regex("!\\[[^\\]]*]\\(<?([^\\s)>]+)>?(?:\\s+\"[^\"]*\")?\\)")
+                    .findAll(markdown).map { match ->
+                        val ref = match.groupValues[1]
+                        val parts = ref.removePrefix("../").split('/')
+                        if (!ref.startsWith("../media/") || ref.contains('\\') || parts.any { it == ".." || it == "." || it.isEmpty() }) {
+                            fail("$md", "v3 illustrations must use relative ../media/<article-id>/<filename> references.")
+                        }
+                        "articles/${ref.removePrefix("../")}"
+                    }.toSet()
+                if (localImages != illustrationPaths) fail("$md", "Markdown image references and article illustration metadata differ.")
             }
         }
         val articleFiles = files.keys.filter { it.startsWith("articles/") }.toSet()

@@ -32,16 +32,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.thesdupalais.data.database.ArticleEntity
 import fr.thesdupalais.data.importer.ArticleImportResult
@@ -54,8 +61,12 @@ fun ArticlesScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val deletionState by viewModel.deletion.state.collectAsStateWithLifecycle()
+    var pendingExport by remember { mutableStateOf<ArticleEntity?>(null) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.importFrom(uri)
+    }
+    val packagePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) pendingExport?.let { viewModel.exportPackage(it.id, uri) }
     }
 
     LazyColumn(
@@ -70,12 +81,14 @@ fun ArticlesScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(10.dp))
             Button(
-                onClick = { filePicker.launch(arrayOf("application/json")) },
+                onClick = { filePicker.launch(arrayOf("application/json", "application/zip", "application/x-zip-compressed")) },
                 enabled = !state.isImporting,
                 modifier = Modifier.fillMaxWidth().testTag("articles-import"),
             ) {
                 Text(if (state.isImporting) "Import en cours…" else "Importer des articles")
             }
+            Text("Un JSON autonome ne transporte pas les fichiers image; utilisez le ZIP illustré pour les conserver.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.exportMessage?.let { Text(it, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall) }
         }
         state.importResult?.let { result ->
             item(key = "import-result") { ArticleImportReport(result, onDismiss = viewModel::dismissImportResult) }
@@ -102,9 +115,9 @@ fun ArticlesScreen(
             item(key = "empty") {
                 Card(modifier = Modifier.fillMaxWidth().testTag("articles-empty")) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Aucun article pour le moment", style = MaterialTheme.typography.titleMedium,
+                Text("Aucun article pour le moment", style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary)
-                        Text("Importez un fichier JSON pour consulter vos articles de savoirs.",
+                        Text("Importez un fichier JSON ou un ZIP d’article illustré pour consulter vos articles hors ligne.",
                             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -116,6 +129,7 @@ fun ArticlesScreen(
                     deleting = deletionState.deletingId != null,
                     onClick = { onArticleSelected(article.id) },
                     onRequestDelete = viewModel.deletion::request,
+                    onRequestExport = { article -> pendingExport = article; packagePicker.launch("${article.title.replace(Regex("[^A-Za-z0-9_-]"), "-")}.zip") },
                 )
             }
         }
@@ -154,6 +168,7 @@ private fun ArticleListItem(
     deleting: Boolean,
     onClick: () -> Unit,
     onRequestDelete: (ArticleEntity) -> Unit,
+    onRequestExport: (ArticleEntity) -> Unit,
 ) {
     var menuExpanded by remember(article.id) { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().testTag("article-row-${article.id}")) {
@@ -177,6 +192,11 @@ private fun ArticleListItem(
                         .semantics { contentDescription = "Actions pour ${article.title}" },
                 ) { Text("⋮", style = MaterialTheme.typography.titleLarge) }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Exporter en ZIP illustré") },
+                        onClick = { menuExpanded = false; onRequestExport(article) },
+                        enabled = !deleting,
+                    )
                     DropdownMenuItem(
                         text = { Text("Supprimer") },
                         onClick = {
@@ -223,10 +243,19 @@ private fun ArticleImportReport(result: ArticleImportResult, onDismiss: () -> Un
 @Composable
 fun ArticleDetailScreen(
     state: ArticleDetailState,
+    imageStore: fr.thesdupalais.data.database.ArticleImageStore,
     onBack: () -> Unit,
 ) {
+    val detailScrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var viewportCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var markdownCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxSize()
+            .onGloballyPositioned { viewportCoordinates = it }
+            .verticalScroll(detailScrollState)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         TextButton(onClick = onBack, modifier = Modifier.testTag("article-detail-back")) { Text("‹  Savoirs") }
         when (state) {
@@ -243,37 +272,35 @@ fun ArticleDetailScreen(
                 Text(state.article.category, style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(20.dp))
-                ArticleMarkdownContent(state.article.markdown)
+                ArticleMarkdownContent(
+                    articleId = state.article.id,
+                    markdown = state.article.markdown,
+                    imageStore = imageStore,
+                    onWebViewPositioned = { markdownCoordinates = it },
+                    onTocTarget = { targetInDocumentPx ->
+                        val viewport = viewportCoordinates
+                        val markdownCoordinatesNow = markdownCoordinates
+                        if (viewport != null && markdownCoordinatesNow != null) {
+                            val articleTopInViewport = markdownCoordinatesNow.positionInRoot().y - viewport.positionInRoot().y
+                            val targetOffsetPx = with(density) { targetInDocumentPx.dp.toPx() }
+                            val target = (detailScrollState.value + articleTopInViewport + targetOffsetPx)
+                                .roundToInt().coerceIn(0, detailScrollState.maxValue)
+                            coroutineScope.launch { detailScrollState.animateScrollTo(target) }
+                        }
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ArticleMarkdownContent(markdown: String) {
-    val blocks = remember(markdown) { ArticleMarkdownRenderer.render(markdown) }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.testTag("article-markdown-content")) {
-        blocks.forEachIndexed { index, block ->
-            val textStyle = when (block.kind) {
-                ArticleMarkdownBlockKind.HEADING_1 -> MaterialTheme.typography.headlineSmall
-                ArticleMarkdownBlockKind.HEADING_2 -> MaterialTheme.typography.titleLarge
-                ArticleMarkdownBlockKind.HEADING_3 -> MaterialTheme.typography.titleMedium
-                else -> MaterialTheme.typography.bodyLarge
-            }
-            val weight = if (block.kind in setOf(
-                    ArticleMarkdownBlockKind.HEADING_1,
-                    ArticleMarkdownBlockKind.HEADING_2,
-                    ArticleMarkdownBlockKind.HEADING_3,
-                )) FontWeight.SemiBold else null
-            if (block.marker == null) {
-                Text(block.text, style = textStyle, fontWeight = weight, modifier = Modifier.testTag("article-markdown-block-$index"))
-            } else {
-                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().testTag("article-markdown-block-$index")) {
-                    Text(block.marker, style = textStyle, fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(30.dp))
-                    Text(block.text, style = textStyle, modifier = Modifier.weight(1f))
-                }
-            }
-        }
-    }
+private fun ArticleMarkdownContent(
+    articleId: UUID,
+    markdown: String,
+    imageStore: fr.thesdupalais.data.database.ArticleImageStore,
+    onWebViewPositioned: (LayoutCoordinates) -> Unit,
+    onTocTarget: (Float) -> Unit,
+) {
+    ArticleMarkdownWebView(articleId, markdown, imageStore, onWebViewPositioned, onTocTarget)
 }

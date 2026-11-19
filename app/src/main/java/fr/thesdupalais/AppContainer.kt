@@ -23,6 +23,8 @@ import fr.thesdupalais.data.database.SemanticDictionaryRepository
 import fr.thesdupalais.data.database.TeaRepository
 import fr.thesdupalais.data.database.ArticleRepository
 import fr.thesdupalais.data.importer.ArticleJsonImporter
+import fr.thesdupalais.data.importer.ArticlePackageImporter
+import fr.thesdupalais.data.importer.ArticlePackageExporter
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
 import fr.thesdupalais.data.importer.CollectionImportResult
 import fr.thesdupalais.FirstRunOperations
@@ -64,8 +66,11 @@ class AppContainer(context: Context) : FirstRunOperations {
     val semanticDictionaryRepository = SemanticDictionaryRepository(database, operationWriteCoordinator)
     val teaPhotoStore = fr.thesdupalais.data.database.TeaPhotoStore(context.contentResolver, context.filesDir)
     val teaRepository = TeaRepository(database, operationWriteCoordinator, teaPhotoStore)
-    val articleRepository = ArticleRepository(database, operationWriteCoordinator)
+    val articleImageStore = fr.thesdupalais.data.database.ArticleImageStore(context.filesDir)
+    val articleRepository = ArticleRepository(database, operationWriteCoordinator, articleImageStore)
     val articleJsonImporter = ArticleJsonImporter(articleRepository)
+    val articlePackageImporter = ArticlePackageImporter(articleRepository, context.filesDir)
+    val articlePackageExporter = ArticlePackageExporter(articleRepository, context.contentResolver, context.filesDir)
     val collectionImporter = CollectionImporter(database, preferences, writeCoordinator = operationWriteCoordinator)
     val backupArchiveExporter = BackupArchiveExporter(database, preferences, context.applicationContext.contentResolver, filesDir = context.filesDir)
     val backupRoomOperationApplier = BackupRoomOperationApplier(

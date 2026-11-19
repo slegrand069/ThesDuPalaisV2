@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -37,6 +38,14 @@ class ArticleGeneratorTests(unittest.TestCase):
 
     def read_export(self):
         return json.loads(self.output.read_text(encoding="utf-8"))
+
+    def read_package(self, packages, article_id):
+        with zipfile.ZipFile(packages / f"{article_id}.zip") as archive:
+            return {name: archive.read(name) for name in archive.namelist()}
+
+    @staticmethod
+    def jpeg():
+        return b"\xff\xd8\xff\xe0fake-jpeg\xff\xd9"
 
     def test_generates_and_persists_uuid_then_reuses_it_after_article_edit(self):
         path = self.write_source("note.md", self.source(body="# Départ"))
@@ -145,6 +154,67 @@ class ArticleGeneratorTests(unittest.TestCase):
             {"format": "thesdupalais.articles", "schemaVersion": 1, "articles": []},
             self.read_export(),
         )
+
+    def test_generates_android_package_without_images_and_preserves_legacy_json(self):
+        self.write_source("sans-image.md", self.source(title="Sans image", body="# Texte"))
+        packages = self.root / "packages"
+        result = generer.generate(self.sources, self.output, packages)
+        package = self.read_package(packages, result[0]["id"])
+        manifest = json.loads(package["article.json"])
+        self.assertEqual({"format", "schemaVersion", "id", "title", "category", "markdownPath"}, set(manifest))
+        self.assertEqual("thesdupalais.article", manifest["format"])
+        self.assertEqual(1, manifest["schemaVersion"])
+        self.assertEqual(result[0]["id"], manifest["id"])
+        self.assertEqual("article.md", manifest["markdownPath"])
+        self.assertEqual({"article.json", "article.md"}, set(package))
+        self.assertEqual("# Texte", package["article.md"].decode("utf-8"))
+        self.assertEqual("thesdupalais.articles", self.read_export()["format"])
+
+    def test_generates_only_referenced_images_with_android_relative_names(self):
+        image_dir = self.sources / "images"
+        image_dir.mkdir()
+        (image_dir / "a.jpg").write_bytes(self.jpeg())
+        (image_dir / "b.jpeg").write_bytes(self.jpeg())
+        (image_dir / "unused.jpg").write_bytes(self.jpeg())
+        body = '![A](images/a.jpg "Légende")\n\n![B](<images/b.jpeg>)\n\n![A bis](images/a.jpg)'
+        self.write_source("illustre.md", self.source(body=body))
+        result = generer.generate(self.sources, self.output)
+        package = self.read_package(self.root / "packages", result[0]["id"])
+        self.assertEqual({"article.json", "article.md", "images/a.jpg", "images/b.jpeg"}, set(package))
+        self.assertEqual(self.jpeg(), package["images/a.jpg"])
+        self.assertEqual(body, package["article.md"].decode("utf-8"))
+
+    def test_missing_or_invalid_image_does_not_produce_an_incomplete_zip(self):
+        old_id = "123e4567-e89b-12d3-a456-426614174000"
+        self.write_source("missing.md", self.source(body="![Absente](images/absente.jpg)", article_id=old_id))
+        packages = self.root / "packages"
+        packages.mkdir()
+        with self.assertRaises(generer.GenerationFailure) as raised:
+            generer.generate(self.sources, self.output, packages)
+        self.assertIn("image absente", str(raised.exception))
+        self.assertFalse((packages / f"{old_id}.zip").exists())
+        self.assertFalse(self.output.exists())
+
+    def test_repeated_generation_reuses_uuid_and_produces_multiple_individual_archives(self):
+        self.write_source("a.md", self.source(title="A"))
+        self.write_source("b.md", self.source(title="B"))
+        first = generer.generate(self.sources, self.output)
+        packages_dir = self.root / "packages"
+        first_ids = {row["title"]: row["id"] for row in first}
+        second = generer.generate(self.sources, self.output)
+        self.assertEqual(first_ids, {row["title"]: row["id"] for row in second})
+        self.assertEqual(2, len(list(packages_dir.glob("*.zip"))))
+        for row in second:
+            package = self.read_package(packages_dir, row["id"])
+            self.assertEqual(row["id"], json.loads(package["article.json"])["id"])
+
+    def test_invalid_metadata_reports_source_and_keeps_existing_exports(self):
+        self.output.write_text("existing json", encoding="utf-8")
+        self.write_source("invalid.md", "---\ntitle: \"Titre\"\ncategory: \" \"\n---\n")
+        with self.assertRaises(generer.GenerationFailure) as raised:
+            generer.generate(self.sources, self.output)
+        self.assertIn("category ne peut pas être vide", str(raised.exception))
+        self.assertEqual("existing json", self.output.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

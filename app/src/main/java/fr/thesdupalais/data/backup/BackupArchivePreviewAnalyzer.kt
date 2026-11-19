@@ -37,6 +37,7 @@ object BackupArchivePreviewAnalyzer {
         archive: BackupArchiveValidator.ValidatedArchive,
         local: BackupArchiveValidator.ValidatedArchive,
         selectedSets: Set<String>,
+        localArticles: List<TargetArticleRecord> = emptyList(),
     ): BackupArchivePreview {
         require(selectedSets.isNotEmpty()) { "Sélectionnez au moins un ensemble présent dans l’archive." }
         require(selectedSets.all { it in previewable && it in archive.includedSets }) { "La sélection contient un ensemble absent de l’archive." }
@@ -59,7 +60,7 @@ object BackupArchivePreviewAnalyzer {
                 removeMissing = false,
                 preserveIds = emptySet(),
             )
-            if (archive.schemaVersion >= BackupArchiveValidator.SCHEMA_VERSION) {
+            if (archive.schemaVersion >= BackupArchiveValidator.PHOTO_SCHEMA_VERSION) {
                 val incomingPhotos = incomingTeas.arrayOrEmpty("photos")
                 val currentPhotos = currentTeas.arrayOrEmpty("photos")
                 groups += compareRows("Photos des thés", incomingPhotos, currentPhotos)
@@ -83,8 +84,7 @@ object BackupArchivePreviewAnalyzer {
         }
         if ("articles" in selectedSets) {
             val incoming = archive.json("articles/index.json")!!.array("articles")
-            groups += group("Articles (comparaison locale indisponible)", mapOf(PreviewDisposition.NOT_COMPARABLE to incoming.size))
-            limits += "Les articles sont listés dans l’archive, mais cette version de l’application ne possède pas encore de modèle local pour les comparer."
+            groups += compareArticleRows(incoming, localArticles, archive)
         }
         if (archive.schemaVersion == BackupArchiveValidator.LEGACY_SCHEMA_VERSION) {
             limits += "Le ZIP v1 ne transporte pas les photos des thés; les photos locales liées aux fiches conservées resteront inchangées."
@@ -101,6 +101,38 @@ object BackupArchivePreviewAnalyzer {
             limitations = limits.distinct(),
         )
     }
+
+    private fun compareArticleRows(incoming: List<JSONObject>, local: List<TargetArticleRecord>, archive: BackupArchiveValidator.ValidatedArchive): PreviewGroup {
+        val localById = local.associateBy { it.id }
+        val incomingIds = incoming.map { it.getString("id") }.toSet()
+        val counts = mutableMapOf<PreviewDisposition, Int>()
+        val details = mutableListOf<String>()
+        incoming.forEach { row ->
+            val id = row.getString("id")
+            val previous = localById[id]
+            val markdownPath = row.getString("markdownPath")
+            val incomingMarkdown = archive.entries[markdownPath]?.toString(Charsets.UTF_8).orEmpty()
+            val incomingImageHashes = row.getJSONArray("illustrations").let { images ->
+                (0 until images.length()).map { index ->
+                    archive.entries[images.getJSONObject(index).getString("path")]?.let(::sha256).orEmpty()
+                }
+            }
+            val identical = previous != null && previous.title == row.optString("title") &&
+                previous.category == row.optString("section") && normalizeArticleImageRefs(previous.markdown) == normalizeArticleImageRefs(incomingMarkdown) &&
+                previous.images.map { it.sha256 } == incomingImageHashes
+            val disposition = when { previous == null -> PreviewDisposition.ADDED; identical -> PreviewDisposition.IDENTICAL; else -> PreviewDisposition.MODIFIED }
+            counts[disposition] = counts.getOrDefault(disposition, 0) + 1
+            details += "${row.optString("title", id)} — ${disposition.label()}"
+        }
+        local.filter { it.id !in incomingIds }.forEach {
+            counts[PreviewDisposition.REMOVED] = counts.getOrDefault(PreviewDisposition.REMOVED, 0) + 1
+            details += "${it.title} — supprimé par le remplacement"
+        }
+        return group("Articles", counts, details = details)
+    }
+
+    private fun normalizeArticleImageRefs(markdown: String) = Regex("!\\[([^\\]]*)]\\(<?([^\\s)>]+)>?(\\s+\"[^\"]*\")?\\)")
+        .replace(markdown) { match -> "![${match.groupValues[1]}](IMAGE${match.groupValues[3]})" }
 
     private fun compareRows(name: String, incoming: List<JSONObject>, local: List<JSONObject>): PreviewGroup {
         val localById = local.associateBy { it.getString("id") }

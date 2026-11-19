@@ -19,10 +19,10 @@ object BackupReplacementPreviewPlanner {
     ): BackupReplacementPreviewPlan {
         val incoming = BackupArchiveValidator.validate(archiveBytes)
         val localArchive = BackupArchiveValidator.validate(local.archiveBytes)
-        require(selectedSets.isNotEmpty() && selectedSets.all { it in setOf("teas", "configuration") }) {
-            "Sélectionnez les thés, la configuration, ou les deux. Les articles ne sont pas encore restaurables."
+        require(selectedSets.isNotEmpty() && selectedSets.all { it in setOf("teas", "configuration", "articles") }) {
+            "Sélectionnez un ensemble pris en charge."
         }
-        val comparison = BackupArchivePreviewAnalyzer.analyze(archiveBytes, incoming, localArchive, selectedSets)
+        val comparison = BackupArchivePreviewAnalyzer.analyze(archiveBytes, incoming, localArchive, selectedSets, local.articles)
         val target = BackupTargetStateBuilder.build(BackupTargetRequest(
             archiveBytes = archiveBytes,
             localSnapshotBytes = local.archiveBytes,
@@ -31,6 +31,7 @@ object BackupReplacementPreviewPlanner {
             replacementConfirmed = true,
             photos = local.photos,
             importHistory = local.importHistory,
+            localArticles = local.articles,
         ))
         return BackupReplacementPreviewPlan(selectedSets.toSortedSet(), comparison, target)
     }

@@ -3,7 +3,11 @@ package fr.thesdupalais.data.backup
 import fr.thesdupalais.data.database.ReferenceEntity
 import fr.thesdupalais.data.database.TeaEntity
 import fr.thesdupalais.data.database.TeaPhotoEntity
+import fr.thesdupalais.data.database.ArticleEntity
+import fr.thesdupalais.data.backup.BackupReplacementPreviewPlanner
+import fr.thesdupalais.data.backup.BackupLocalOperationSnapshot
 import fr.thesdupalais.data.operation.DurableBackupOperationJournal
+import fr.thesdupalais.data.backup.TargetOperation
 import fr.thesdupalais.data.preferences.UserPreferences
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -20,6 +24,91 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TeaPhotoBackupArchiveTest {
+    @Test fun v3ArticleReplacementPreparesPortableReferencesAndMultipleImagesWithoutTouchingTeaPayloads() {
+        val id = UUID.fromString("323e4567-e89b-12d3-a456-426614174000")
+        val markdown = "# Plantation\n\n![Feuilles](images/feuille-a.jpg \"Première\")\n\n![Infusion](images/feuille-b.jpg)"
+        val article = ArticleEntity(id, "Plantation", "Botanique", markdown)
+        val source = snapshot(emptyList()).copy(articles = listOf(article), articleImageBytes = mapOf(
+            "$id/feuille-a.jpg" to JPEG, "$id/feuille-b.jpg" to JPEG,
+        ))
+        val incoming = write(source, setOf(BackupExportSet.ARTICLES))
+        val local = BackupLocalOperationSnapshot(write(snapshot(emptyList()), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION)), emptyList(), emptyList())
+        val plan = BackupReplacementPreviewPlanner.plan(incoming, local, setOf("articles"))
+        assertTrue(plan.target.blockers.joinToString(), plan.target.applicable)
+        val target = plan.target.state!!
+        assertTrue(target.replaceArticles)
+        assertEquals(setOf("data/teas.json", "data/configuration.json"), target.payloads.keys)
+        val restored = target.articleRecords.single()
+        assertEquals(id.toString(), restored.id)
+        assertEquals("Botanique", restored.category)
+        assertTrue(restored.markdown.contains("![Feuilles](images/"))
+        assertTrue(restored.markdown.contains("Première"))
+        assertEquals(2, restored.images.size)
+        assertTrue(restored.images.all { it.archivePath?.startsWith("articles/media/$id/") == true })
+        assertTrue(BackupTargetStateBuilder.validatePreparedState(target).isEmpty())
+        val repeated = BackupReplacementPreviewPlanner.plan(incoming, local, setOf("articles"))
+        assertEquals(target.articleRecords, repeated.target.state!!.articleRecords)
+    }
+
+    @Test fun articleMediaIsDurablyStagedBeforeAnyRoomCommit() {
+        val id = UUID.fromString("423e4567-e89b-12d3-a456-426614174000")
+        val article = ArticleEntity(id, "Plantation", "Botanique", "![Feuilles](images/feuille.jpg)")
+        val incoming = write(snapshot(emptyList()).copy(articles = listOf(article), articleImageBytes = mapOf("$id/feuille.jpg" to JPEG)), setOf(BackupExportSet.ARTICLES))
+        val localBytes = write(snapshot(emptyList()), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
+        val preview = BackupReplacementPreviewPlanner.plan(incoming, BackupLocalOperationSnapshot(localBytes, emptyList(), emptyList()), setOf("articles"))
+        val target = preview.target.state!!
+        val journalRoot = java.nio.file.Files.createTempDirectory("article-media-journal-").toFile()
+        val mediaRoot = java.nio.file.Files.createTempDirectory("article-media-root-").toFile()
+        try {
+            val destination = java.io.File(mediaRoot, target.articleRecords.single().images.single().relativePath)
+            destination.parentFile!!.mkdirs()
+            val previousBytes = byteArrayOf(8, 7, 6)
+            destination.writeBytes(previousBytes)
+            val journal = DurableBackupOperationJournal(journalRoot, mediaRoot)
+            val entry = journal.prepare(UUID.randomUUID().toString(), TargetOperation.REPLACE, setOf("articles"), incoming, target, preview.target.fingerprints)
+            assertEquals(1, entry.mediaArtifacts.size)
+            assertTrue(entry.mediaArtifacts.single().imported)
+            assertTrue(journal.stagedMediaFile(entry, target.articleRecords.single().images.single().id).readBytes().contentEquals(JPEG))
+            assertArrayEquals(previousBytes, destination.readBytes())
+        } finally { journalRoot.deleteRecursively(); mediaRoot.deleteRecursively() }
+    }
+
+    @Test fun combinedTeaPhotoAndArticleSelectionKeepsBothMediaFamiliesInTheTarget() {
+        val id = UUID.fromString("523e4567-e89b-12d3-a456-426614174000")
+        val article = ArticleEntity(id, "Plantation", "Botanique", "![Feuilles](images/feuille.jpg)")
+        val teaPhoto = TeaPhotoEntity(PHOTO_A, TEA_A, "tea-photos/$PHOTO_A.jpg", 0, true)
+        val combined = snapshot(listOf(teaPhoto)).copy(
+            articles = listOf(article), articleImageBytes = mapOf("$id/feuille.jpg" to JPEG),
+        )
+        val incoming = write(combined, setOf(BackupExportSet.TEAS, BackupExportSet.ARTICLES))
+        val local = BackupLocalOperationSnapshot(write(snapshot(emptyList()), setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION)), emptyList(), emptyList())
+        val plan = BackupReplacementPreviewPlanner.plan(incoming, local, setOf("teas", "articles"))
+        assertTrue(plan.target.blockers.joinToString(), plan.target.applicable)
+        val target = plan.target.state!!
+        assertEquals(listOf(PHOTO_A.toString()), target.photosToKeep.map { it.id })
+        assertTrue(target.replaceArticles)
+        assertEquals(1, target.articleRecords.single().images.size)
+        assertTrue(BackupTargetStateBuilder.validatePreparedState(target).isEmpty())
+    }
+
+    @Test fun v3ExportsArticlesAndTheirPortableIllustrationFiles() {
+        val articleId = UUID.fromString("223e4567-e89b-12d3-a456-426614174000")
+        val article = ArticleEntity(articleId, "Plantation", "Savoirs", "# Plantation\n\n![Feuilles](images/feuilles.jpg \"Feuilles de thé\")")
+        val articleSnapshot = snapshot(emptyList()).copy(
+            articles = listOf(article),
+            articleImageBytes = mapOf("$articleId/feuilles.jpg" to JPEG),
+        )
+        val archive = write(articleSnapshot, setOf(BackupExportSet.ARTICLES))
+        val validated = BackupArchiveValidator.validate(archive)
+        assertEquals(3, validated.schemaVersion)
+        assertEquals(setOf("articles/index.json", "articles/content/$articleId.md", "articles/media/$articleId/feuilles.jpg"), validated.entries.keys)
+        val index = JSONObject(String(validated.entries.getValue("articles/index.json")))
+        assertEquals("$articleId", index.getJSONArray("articles").getJSONObject(0).getString("id"))
+        assertEquals("articles/media/$articleId/feuilles.jpg", index.getJSONArray("articles").getJSONObject(0).getJSONArray("illustrations").getJSONObject(0).getString("path"))
+        assertTrue(String(validated.entries.getValue("articles/content/$articleId.md")).contains("../media/$articleId/feuilles.jpg"))
+        assertFalse(String(validated.entries.getValue("articles/index.json")).contains("base64"))
+    }
+
     @Test fun v2ExportsMultipleTeaPhotosAsPortableFilesAndKeepsOrderAndPrimary() {
         val photos = listOf(
             TeaPhotoEntity(PHOTO_A, TEA_A, "tea-photos/$PHOTO_A.jpg", 0, true),
@@ -30,7 +119,7 @@ class TeaPhotoBackupArchiveTest {
             snapshot(photos), setOf(BackupExportSet.TEAS), UserPreferences(), "test", BACKUP, Instant.parse("2026-01-01T00:00:00Z"),
         )
         val validated = BackupArchiveValidator.validate(archive)
-        assertEquals(2, validated.schemaVersion)
+        assertEquals(3, validated.schemaVersion)
         assertEquals(setOf("photos/$PHOTO_A.jpg", "photos/$PHOTO_B.jpg", "photos/$PHOTO_C.jpg"), validated.entries.keys.filter { it.startsWith("photos/") }.toSet())
         val root = JSONObject(String(validated.entries.getValue("data/teas.json")))
         val rows = root.getJSONArray("photos")

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 class ArticleRepository(
     private val database: AppDatabase,
     private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
+    private val imageStore: ArticleImageStore? = null,
 ) : ArticleImportStore {
     fun observeAll(): Flow<List<ArticleEntity>> = database.articleDao().observeAll()
 
@@ -45,7 +46,9 @@ class ArticleRepository(
 
     /** Returns false when the UUID does not exist. */
     suspend fun deleteById(id: UUID): Boolean = writeCoordinator.withWritePermit {
-        database.articleDao().deleteById(id) == 1
+        val deleted = database.articleDao().deleteById(id) == 1
+        if (deleted) imageStore?.cleanup(id.toString(), emptySet())
+        deleted
     }
 }
 

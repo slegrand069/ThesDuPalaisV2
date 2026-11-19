@@ -127,9 +127,6 @@ internal fun BackupRestoreSection(workflow: BackupReplacementWorkflow) {
                         Text(restoreSetLabel(set), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                if ("articles" in current.includedSets) {
-                    Text("Articles : présents dans l’archive, mais pas encore restaurables.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
                 Text("Les ensembles décochés restent inchangés.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 when {
                     selected.isEmpty() -> Text("Sélectionnez au moins un ensemble.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
@@ -225,10 +222,11 @@ private fun RestoreConsequenceSummary(plan: BackupReplacementPreviewPlan, modifi
     }
 }
 
-private val SUPPORTED_RESTORE_SETS = setOf("teas", "configuration")
+private val SUPPORTED_RESTORE_SETS = setOf("teas", "configuration", "articles")
 private fun restoreSetLabel(set: String) = when (set) {
     "teas" -> "Thés, associations, dégustations et mouvements"
     "configuration" -> "Configuration et référentiels"
+    "articles" -> "Articles et images intégrées"
     else -> set
 }
 private fun restoreDisposition(disposition: PreviewDisposition) = when (disposition) {

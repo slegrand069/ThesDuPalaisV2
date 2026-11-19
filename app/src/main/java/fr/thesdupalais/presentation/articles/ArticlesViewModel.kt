@@ -10,6 +10,8 @@ import fr.thesdupalais.data.database.ArticleRepository
 import fr.thesdupalais.data.importer.ArticleImportGlobalError
 import fr.thesdupalais.data.importer.ArticleImportResult
 import fr.thesdupalais.data.importer.ArticleJsonImporter
+import fr.thesdupalais.data.importer.ArticlePackageImporter
+import fr.thesdupalais.data.importer.ArticlePackageExporter
 import fr.thesdupalais.data.importer.readArticleJsonDocument
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -29,11 +31,14 @@ data class ArticlesUiState(
     val isLoading: Boolean = true,
     val isImporting: Boolean = false,
     val importResult: ArticleImportResult? = null,
+    val exportMessage: String? = null,
 )
 
 class ArticlesViewModel(
     repository: ArticleRepository,
     private val importer: ArticleJsonImporter,
+    private val packageImporter: ArticlePackageImporter,
+    private val packageExporter: ArticlePackageExporter,
     private val contentResolver: ContentResolver,
 ) : ViewModel() {
     val deletion = ArticleDeletionController(repository::deleteById)
@@ -55,8 +60,18 @@ class ArticlesViewModel(
             mutableState.update { it.copy(isImporting = true, importResult = null) }
             val result = try {
                 withContext(Dispatchers.IO) {
-                    val json = readArticleJsonDocument { contentResolver.openInputStream(uri) }
-                    importer.importJson(json)
+                    val type = contentResolver.getType(uri).orEmpty().lowercase()
+                    if (type.contains("zip") || uri.lastPathSegment.orEmpty().substringAfterLast('.', "").lowercase() == "zip") {
+                        val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                            val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
+                            while (true) { val count = input.read(buffer); if (count < 0) break; if (out.size() + count > fr.thesdupalais.data.importer.ArticlePackageArchive.MAX_ARCHIVE_BYTES) throw java.io.IOException("Archive supérieure à 50 MiB."); out.write(buffer, 0, count) }
+                            out.toByteArray()
+                        } ?: throw java.io.IOException("Archive illisible.")
+                        packageImporter.import(bytes)
+                    } else {
+                        val json = readArticleJsonDocument { contentResolver.openInputStream(uri) }
+                        importer.importJson(json)
+                    }
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -74,6 +89,15 @@ class ArticlesViewModel(
 
     fun dismissImportResult() = mutableState.update { it.copy(importResult = null) }
 
+    fun exportPackage(articleId: UUID, destination: Uri) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(exportMessage = "Création du ZIP de l’article…") }
+            runCatching { withContext(Dispatchers.IO) { packageExporter.export(articleId, destination) } }
+                .onSuccess { mutableState.update { it.copy(exportMessage = "ZIP de l’article créé et vérifié.") } }
+                .onFailure { error -> mutableState.update { it.copy(exportMessage = "Échec de l’export : ${error.message ?: "erreur inconnue"}") } }
+        }
+    }
+
     fun confirmArticleDeletion() {
         viewModelScope.launch { deletion.confirm() }
     }
@@ -82,12 +106,14 @@ class ArticlesViewModel(
 class ArticlesViewModelFactory(
     private val repository: ArticleRepository,
     private val importer: ArticleJsonImporter,
+    private val packageImporter: ArticlePackageImporter,
+    private val packageExporter: ArticlePackageExporter,
     private val contentResolver: ContentResolver,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(ArticlesViewModel::class.java.isAssignableFrom(modelClass))
-        return ArticlesViewModel(repository, importer, contentResolver) as T
+        return ArticlesViewModel(repository, importer, packageImporter, packageExporter, contentResolver) as T
     }
 }
 

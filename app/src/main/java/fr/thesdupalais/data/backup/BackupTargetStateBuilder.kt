@@ -20,6 +20,21 @@ data class TargetPhotoRecord(
     /** Present only while a newly restored image is staged from a validated archive. */
     val archivePath: String? = null,
 )
+data class TargetArticleImage(
+    val id: String,
+    val articleId: String,
+    val relativePath: String,
+    val archivePath: String? = null,
+    val sizeBytes: Long,
+    val sha256: String,
+)
+data class TargetArticleRecord(
+    val id: String,
+    val title: String,
+    val category: String,
+    val markdown: String,
+    val images: List<TargetArticleImage> = emptyList(),
+)
 data class TargetImportRecord(val datasetId: String, val contentSha256: String, val schemaVersion: Int, val isSuperseded: Boolean = false)
 
 enum class TargetOperation { REPLACE, MERGE }
@@ -34,6 +49,7 @@ data class BackupTargetRequest(
     val confirmedChanges: Set<ConfirmedMergeChange> = emptySet(),
     val photos: List<TargetPhotoRecord> = emptyList(),
     val importHistory: List<TargetImportRecord> = emptyList(),
+    val localArticles: List<TargetArticleRecord> = emptyList(),
     val planner: BackupArchiveMergePlan? = null,
 )
 
@@ -45,6 +61,9 @@ data class BackupTargetState(
     val supersededImportDatasetIds: Set<String>,
     /** Local media metadata that must be quarantined before a future destructive Room commit. */
     val photosToQuarantine: List<TargetPhotoRecord> = emptyList(),
+    val articleRecords: List<TargetArticleRecord> = emptyList(),
+    val articlesIncluded: Boolean = false,
+    val replaceArticles: Boolean = false,
 )
 
 data class TargetChange(val set: String, val identity: String, val action: String, val fields: List<String> = emptyList())
@@ -70,7 +89,7 @@ data class BackupTargetResult(
  * The local snapshot is the validated, complete teas+configuration ZIP produced by the exporter.
  */
 object BackupTargetStateBuilder {
-    private val supported = setOf("teas", "configuration")
+    private val supported = setOf("teas", "configuration", "articles")
     private val teaScalars = listOf(
         "legacyId", "name", "categoryId", "description", "technicalInformation", "personalNotes",
         "olfactoryRating", "tasteRating", "brewTemperatureCelsius", "infusionDurationSeconds", "statusId",
@@ -85,6 +104,8 @@ object BackupTargetStateBuilder {
         snapshotBytes: ByteArray,
         photos: List<TargetPhotoRecord>,
         importHistory: List<TargetImportRecord>,
+        articles: List<TargetArticleRecord> = emptyList(),
+        includeArticles: Boolean = false,
     ): String {
         val archive = BackupArchiveValidator.validate(snapshotBytes)
         val plannerHash = BackupArchiveMergePlanner.localFingerprint(archive)
@@ -96,6 +117,7 @@ object BackupTargetStateBuilder {
             importHistory.sortedBy { it.datasetId }.forEach {
                 append('|').append(it.datasetId).append(':').append(it.contentSha256).append(':').append(it.schemaVersion).append(':').append(it.isSuperseded)
             }
+            if (includeArticles) append("|articles|").append(articleDigest(articles))
         })
     }
 
@@ -145,10 +167,37 @@ object BackupTargetStateBuilder {
             state.supersededImportDatasetIds.forEach { id ->
                 if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false).not()) errors += "Un identifiant d’import remplacé est invalide."
             }
+            if (state.replaceArticles != state.articlesIncluded || (!state.articlesIncluded && state.articleRecords.isNotEmpty())) errors += "Les indicateurs de sélection des articles sont incohérents."
+            if (state.articlesIncluded) validateArticleRecords(state.articleRecords, errors)
+            if ((state.photosToKeep.map { it.id }.toSet() intersect state.articleRecords.flatMap { it.images }.map { it.id }.toSet()).isNotEmpty()) {
+                errors += "Un identifiant de média est partagé entre une photo de thé et une image d’article."
+            }
         } catch (error: Exception) {
             errors += "L’état cible préparé est illisible : ${error.message ?: "contenu invalide"}."
         }
         return errors.distinct()
+    }
+
+    private fun validateArticleRecords(records: List<TargetArticleRecord>, errors: MutableList<String>) {
+        val ids = mutableSetOf<String>()
+        val imageIds = mutableSetOf<String>()
+        val imageRefs = Regex("!\\[[^\\]]*]\\(<?images/([0-9a-fA-F-]{36}\\.jpg)>?(?:\\s+\"[^\"]*\")?\\)")
+        records.forEach { article ->
+            if (runCatching { UUID.fromString(article.id).toString() == article.id }.getOrDefault(false).not() || !ids.add(article.id) || article.title.isBlank() || article.category.isBlank()) {
+                errors += "Métadonnées d’article invalides ou UUID dupliqué : ${article.id}."
+            }
+            val localRefs = imageRefs.findAll(article.markdown).map { it.groupValues[1].removeSuffix(".jpg") }.toList()
+            val articleImages = article.images
+            if (localRefs.toSet() != articleImages.map { it.id }.toSet()) errors += "Références Markdown et images différentes pour l’article ${article.id}."
+            articleImages.forEach { image ->
+                if (image.articleId != article.id || runCatching { UUID.fromString(image.id).toString() == image.id }.getOrDefault(false).not() ||
+                    !imageIds.add(image.id) || image.relativePath != "article-images/${article.id}/${image.id}.jpg" || image.sizeBytes !in 1..BackupArchiveValidator.MAX_IMAGE_BYTES ||
+                    !Regex("[0-9a-f]{64}").matches(image.sha256) ||
+                    (image.archivePath != null && (!image.archivePath.startsWith("articles/media/${article.id}/") || image.archivePath.contains("..") || '\\' in image.archivePath))) {
+                    errors += "Métadonnée d’image invalide pour l’article ${article.id}."
+                }
+            }
+        }
     }
 
     private fun validationArchive(payloads: Map<String, String>): ByteArray {
@@ -205,12 +254,13 @@ object BackupTargetStateBuilder {
         val local = try { BackupArchiveValidator.validate(request.localSnapshotBytes) } catch (e: Exception) {
             return failed(request, listOf("Instantané local invalide : ${e.message ?: "lecture impossible"}"))
         }
-        if (request.selectedSets.isEmpty() || !request.selectedSets.all { it in supported }) blockers += "Sélection vide ou ensemble non pris en charge (les articles sont hors périmètre)."
+        if (request.selectedSets.isEmpty() || !request.selectedSets.all { it in supported }) blockers += "Sélection vide ou ensemble non pris en charge."
+        if (request.operation == TargetOperation.MERGE && "articles" in request.selectedSets) blockers += "La fusion des articles n’est pas disponible; choisissez le remplacement des articles."
         if (!archive.includedSets.containsAll(request.selectedSets)) blockers += "Un ensemble sélectionné est absent de l’archive."
-        if (local.includedSets != supported) blockers += "L’instantané local doit contenir les thés et la configuration."
+        if (!local.includedSets.containsAll(setOf("teas", "configuration"))) blockers += "L’instantané local doit contenir les thés et la configuration."
         val archiveHash = sha(request.archiveBytes)
         val plannerLocalHash = BackupArchiveMergePlanner.localFingerprint(local)
-        val localHash = fingerprintLocalSnapshot(request.localSnapshotBytes, request.photos, request.importHistory)
+        val localHash = fingerprintLocalSnapshot(request.localSnapshotBytes, request.photos, request.importHistory, request.localArticles, "articles" in request.selectedSets)
         var plan = request.planner
         if (request.operation == TargetOperation.REPLACE && !request.replacementConfirmed) blockers += "Le remplacement doit être explicitement confirmé."
         if (request.operation == TargetOperation.MERGE) {
@@ -252,7 +302,7 @@ object BackupTargetStateBuilder {
         val targetTeaIds = targetTea.array("teas").map { it.getString("id") }.toSet()
         val localPhotoById = request.photos.associateBy { it.id }
         val incomingTeaIds = if ("teas" in request.selectedSets) incomingTea?.array("teas")?.map { it.getString("id") }?.toSet().orEmpty() else emptySet()
-        val useV2Photos = "teas" in request.selectedSets && archive.schemaVersion >= BackupArchiveValidator.SCHEMA_VERSION
+        val useV2Photos = "teas" in request.selectedSets && archive.schemaVersion >= BackupArchiveValidator.PHOTO_SCHEMA_VERSION
         val desiredPhotos = mutableListOf<TargetPhotoRecord>()
         if (useV2Photos) {
             val incomingRows = incomingPhotoRecords(archive, incomingTeaIds.intersect(targetTeaIds))
@@ -280,12 +330,23 @@ object BackupTargetStateBuilder {
         val keptIdentity = keptPhotos.map { it.id to it.relativePath }.toSet()
         val removedPhotos = request.photos.filter { (it.id to it.relativePath) !in keptIdentity }
         if (removedPhotos.isNotEmpty()) warnings += "${removedPhotos.size} photo(s) locale(s) absente(s) de l’état cible seront mises en quarantaine puis supprimées après validation de la restauration."
+        val replaceArticles = "articles" in request.selectedSets
+        val desiredArticles = if (replaceArticles) incomingArticleRecords(archive) else emptyList()
+        if (replaceArticles) {
+            changes += TargetChange("articles", "*", "REPLACED", listOf("articles"))
+            request.localArticles.filter { old -> desiredArticles.none { it.id == old.id } }.forEach {
+                changes += TargetChange("articles", it.id, "REMOVED", listOf("article"))
+            }
+        }
         val superseded = if (payloadCanonical(targetTea, targetConfig) != payloadCanonical(localTea, localConfig)) request.importHistory.map { it.datasetId }.toSortedSet() else emptySet()
         val state = if (blockers.isEmpty()) BackupTargetState(
             payloads = payloads.mapValues { canonicalJson(it.value) }.toSortedMap(),
             photosToKeep = keptPhotos,
             photosToQuarantine = removedPhotos.sortedWith(compareBy<TargetPhotoRecord> { it.teaId }.thenBy { it.position }.thenBy { it.id }),
             supersededImportDatasetIds = superseded,
+            articleRecords = desiredArticles,
+            articlesIncluded = replaceArticles,
+            replaceArticles = replaceArticles,
         ) else null
         val opDigest = sha(canonicalRequest(request, archiveHash, localHash, plan))
         val targetDigest = state?.let { digestState(it) } ?: ""
@@ -311,6 +372,50 @@ object BackupTargetStateBuilder {
             )
         }.filterNotNull() }
     }
+
+    private fun incomingArticleRecords(archive: BackupArchiveValidator.ValidatedArchive): List<TargetArticleRecord> {
+        val index = obj(archive, "articles/index.json") ?: return emptyList()
+        val imageRegex = Regex("!\\[([^\\]]*)]\\(<?([^\\s)>]+)>?(\\s+\"[^\"]*\")?\\)")
+        return index.array("articles").map { row ->
+            val id = row.getString("id")
+            val articleId = runCatching { UUID.fromString(id).also { require(it.toString() == id) } }.getOrElse { throw IllegalArgumentException("UUID d’article non canonique : $id") }
+            val title = row.getString("title").trim()
+            val category = if (row.isNull("section")) "" else row.getString("section").trim()
+            require(title.isNotEmpty() && category.isNotEmpty()) { "Article $id sans titre ou catégorie." }
+            val markdownPath = row.getString("markdownPath")
+            val markdownBytes = archive.entries[markdownPath] ?: throw IllegalArgumentException("Markdown absent pour l’article $id.")
+            val markdown = Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(markdownBytes)).toString()
+            val illustrationRows = row.getJSONArray("illustrations")
+            val targetImages = mutableListOf<TargetArticleImage>()
+            val pathToImage = mutableMapOf<String, String>()
+            for (i in 0 until illustrationRows.length()) {
+                val path = illustrationRows.getJSONObject(i).getString("path")
+                val bytes = archive.entries[path] ?: throw IllegalArgumentException("Image d’article absente : $path.")
+                val digest = sha(bytes)
+                val assetId = UUID.nameUUIDFromBytes("$id|$path|$digest".toByteArray(Charsets.UTF_8)).toString()
+                val filename = "$assetId.jpg"
+                val ref = "../media/${path.removePrefix("articles/media/")}"
+                require(path.startsWith("articles/media/$id/")) { "Image associée à un autre article : $path" }
+                pathToImage[ref] = filename
+                targetImages += TargetArticleImage(
+                    id = assetId, articleId = id, relativePath = "article-images/$id/$filename", archivePath = path,
+                    sizeBytes = bytes.size.toLong(), sha256 = digest,
+                )
+            }
+            val rewritten = imageRegex.replace(markdown) { match ->
+                val name = pathToImage[match.groupValues[2]] ?: throw IllegalArgumentException("Référence d’image non déclarée pour l’article $id : ${match.groupValues[2]}.")
+                match.value.replace(match.groupValues[2], "images/$name")
+            }
+            TargetArticleRecord(id, title, category, rewritten, targetImages)
+        }
+    }
+
+    internal fun articleDigest(articles: List<TargetArticleRecord>): String = sha(buildString {
+        articles.sortedBy { it.id }.forEach { article ->
+            append(article.id).append('|').append(article.title).append('|').append(article.category).append('|').append(article.markdown).append('\n')
+            article.images.forEach { image -> append(image.id).append('|').append(image.relativePath).append('|').append(image.archivePath.orEmpty()).append('|').append(image.sizeBytes).append('|').append(image.sha256).append('\n') }
+        }
+    })
 
     private fun localImagePath(photoId: String) = "photos/$photoId.jpg"
 
@@ -603,16 +708,18 @@ object BackupTargetStateBuilder {
         p?.referenceIdRemap?.toSortedMap()?.forEach { (from, to) -> append("|reference:").append(from).append(':').append(to) }
     }
     private fun digestState(s: BackupTargetState): String {
-        val legacy = s.payloads["data/teas.json"]?.let { runCatching { !JSONObject(it).has("photos") }.getOrDefault(false) } == true &&
+        val legacyPhotoHash = s.payloads["data/teas.json"]?.let { runCatching { !JSONObject(it).has("photos") }.getOrDefault(false) } == true &&
             (s.photosToKeep + s.photosToQuarantine).all { !it.isPrimary && it.archivePath == null }
         val keep = s.photosToKeep.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") {
-            if (legacy) "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" else "${it.id}|${it.teaId}|${it.relativePath}|${it.position}|${it.isPrimary}|${it.archivePath.orEmpty()}"
+            if (legacyPhotoHash) "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" else "${it.id}|${it.teaId}|${it.relativePath}|${it.position}|${it.isPrimary}|${it.archivePath.orEmpty()}"
         }
         val quarantine = s.photosToQuarantine.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") {
-            if (legacy) "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" else "${it.id}|${it.teaId}|${it.relativePath}|${it.position}|${it.isPrimary}"
+            if (legacyPhotoHash) "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" else "${it.id}|${it.teaId}|${it.relativePath}|${it.position}|${it.isPrimary}"
         }
+        val legacyArticleHash = s.articleRecords.isEmpty() && !s.articlesIncluded && !s.replaceArticles
+        val articleTail = if (legacyArticleHash) "" else "\narticlesIncluded=${s.articlesIncluded}\nreplaceArticles=${s.replaceArticles}\narticleRecords=${articleDigest(s.articleRecords)}"
         return sha(s.payloads.toSortedMap().entries.joinToString("\n") { "${it.key}\u0000${canonical(JSONObject(it.value))}" } +
-            "\nkeep\n$keep\nquarantine\n$quarantine\nsuperseded\n" + s.supersededImportDatasetIds.sorted().joinToString("\n"))
+            "\nkeep\n$keep\nquarantine\n$quarantine\nsuperseded\n" + s.supersededImportDatasetIds.sorted().joinToString("\n") + articleTail)
     }
     private fun payloadCanonical(a: JSONObject, b: JSONObject) = canonical(a) + canonical(b)
     private fun sha(text: String) = sha(text.toByteArray(StandardCharsets.UTF_8))

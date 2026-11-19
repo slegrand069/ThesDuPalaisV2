@@ -30,15 +30,15 @@ class BackupArchivePreviewReader(
             output.toByteArray()
         } ?: throw IOException("Le fichier sélectionné n’a pas pu être lu.")
         val inputValidated = BackupArchiveValidator.validate(bytes)
-        val localBytes = localExporter.createArchive(setOf(BackupExportSet.TEAS, BackupExportSet.CONFIGURATION))
-        val localValidated = BackupArchiveValidator.validate(localBytes)
+        val localSnapshot = localExporter.captureCurrentOperationSnapshot()
+        val localValidated = BackupArchiveValidator.validate(localSnapshot.archiveBytes)
         val sets = inputValidated.includedSets.sorted()
         val selectionOptions = mutableListOf<Set<String>>()
         for (mask in 1 until (1 shl sets.size)) {
             selectionOptions += sets.indices.filter { mask and (1 shl it) != 0 }.map { sets[it] }.toSet()
         }
         val previews = selectionOptions.map { selected ->
-            BackupArchivePreviewAnalyzer.analyze(bytes, inputValidated, localValidated, selected)
+            BackupArchivePreviewAnalyzer.analyze(bytes, inputValidated, localValidated, selected, localSnapshot.articles)
         }
         BackupPreviewOptions(inputValidated.includedSets, previews)
     }

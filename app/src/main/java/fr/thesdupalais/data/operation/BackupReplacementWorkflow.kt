@@ -98,8 +98,8 @@ class BackupReplacementWorkflow(
         require(confirmed) { "La confirmation explicite du remplacement est obligatoire." }
         require(selection.sessionId == session.sessionId) { "La prévisualisation ne correspond plus à cette archive." }
         val plan = selection.plan
-        require(plan.selectedSets.isNotEmpty() && plan.selectedSets.all { it in setOf("teas", "configuration") }) {
-            "Seuls les thés et la configuration peuvent être restaurés dans cette version."
+        require(plan.selectedSets.isNotEmpty() && plan.selectedSets.all { it in setOf("teas", "configuration", "articles") }) {
+            "La sélection contient un ensemble non pris en charge."
         }
         require(plan.applicable) {
             "La restauration est bloquée : ${plan.blockers.joinToString(" ").ifBlank { "état cible invalide" }}"
@@ -121,7 +121,7 @@ class BackupReplacementWorkflow(
                     // The exact preview snapshot must still be current while holding the exclusive write permit.
                     val fresh = exporter.captureCurrentOperationSnapshot()
                     val freshFingerprint = BackupTargetStateBuilder.fingerprintLocalSnapshot(
-                        fresh.archiveBytes, fresh.photos, fresh.importHistory,
+                        fresh.archiveBytes, fresh.photos, fresh.importHistory, fresh.articles, "articles" in plan.selectedSets,
                     )
                     require(freshFingerprint == plan.target.fingerprints.localSnapshotSha256) {
                         "La collection a changé depuis la prévisualisation. Rechargez l’archive et vérifiez à nouveau les conséquences."

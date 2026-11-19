@@ -15,6 +15,7 @@ import fr.thesdupalais.data.database.TeaEntity
 import fr.thesdupalais.data.database.TeaMomentEntity
 import fr.thesdupalais.data.database.TeaRegionEntity
 import fr.thesdupalais.data.database.TeaPhotoEntity
+import fr.thesdupalais.data.database.ArticleEntity
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
 import fr.thesdupalais.data.preferences.UserPreferences
 import java.io.IOException
@@ -39,9 +40,10 @@ data class BackupLocalOperationSnapshot(
     val archiveBytes: ByteArray,
     val photos: List<TargetPhotoRecord>,
     val importHistory: List<TargetImportRecord>,
+    val articles: List<TargetArticleRecord> = emptyList(),
 )
 
-/** Read-only snapshot writer. Articles remain intentionally unavailable until their model exists. */
+/** Read-only snapshot writer for collection data and offline knowledge articles. */
 class BackupArchiveExporter(
     private val database: AppDatabase,
     private val preferences: LocalPreferencesRepository,
@@ -52,7 +54,6 @@ class BackupArchiveExporter(
 ) {
     suspend fun exportTo(uri: Uri, selectedSets: Set<BackupExportSet>) {
         if (selectedSets.isEmpty()) throw IllegalArgumentException("Sélectionnez au moins un ensemble à exporter.")
-        if (BackupExportSet.ARTICLES in selectedSets) throw UnsupportedOperationException("L’export des articles sera disponible lorsque leur modèle sera implémenté.")
         val bytes = createArchive(selectedSets)
         BackupArchiveValidator.validate(bytes)
         val output = contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Le fichier de destination n’a pas pu être ouvert.")
@@ -74,7 +75,6 @@ class BackupArchiveExporter(
 
     suspend fun createArchive(selectedSets: Set<BackupExportSet>): ByteArray {
         if (selectedSets.isEmpty()) throw IllegalArgumentException("Sélectionnez au moins un ensemble à exporter.")
-        if (BackupExportSet.ARTICLES in selectedSets) throw UnsupportedOperationException("L’export des articles sera disponible lorsque leur modèle sera implémenté.")
         val snapshot = database.withTransaction { readSnapshot(selectedSets) }
         val preferenceSnapshot = if (BackupExportSet.CONFIGURATION in selectedSets) preferences.preferences.first() else UserPreferences()
         return BackupArchiveWriter.write(snapshot, selectedSets, preferenceSnapshot, applicationVersion, UUID.randomUUID(), now())
@@ -97,8 +97,30 @@ class BackupArchiveExporter(
         val importHistory = database.importedDatasetDao().allForBackup().map {
             TargetImportRecord(it.datasetId.toString(), it.contentSha256, it.schemaVersion, it.isSuperseded)
         }
-        return BackupLocalOperationSnapshot(archive, photos, importHistory)
+        val articles = readLocalArticleRecords(database.articleDao().allForBackup())
+        return BackupLocalOperationSnapshot(archive, photos, importHistory, articles)
     }
+
+    private fun readLocalArticleRecords(rows: List<ArticleEntity>): List<TargetArticleRecord> {
+        val root = filesDir?.canonicalFile ?: throw IOException("Le stockage privé des images d’articles n’est pas configuré.")
+        val reference = Regex("!\\[([^\\]]*)]\\(<?images/([0-9a-fA-F-]{36}\\.jpg)>?(?:\\s+\"[^\"]*\")?\\)")
+        return rows.map { article ->
+            val images = reference.findAll(article.markdown).map { match ->
+                val filename = match.groupValues[2]
+                val imageId = filename.removeSuffix(".jpg")
+                val relative = "article-images/${article.id}/$filename"
+                val file = File(root, relative).canonicalFile
+                val safe = file.path.startsWith(root.path.trimEnd(File.separatorChar) + File.separator)
+                val bytes = if (safe && file.isFile && file.length() <= BackupArchiveValidator.MAX_IMAGE_BYTES) runCatching { FileInputStream(file).use { it.readBytes() } }.getOrNull() else null
+                TargetArticleImage(imageId, article.id.toString(), relative, sizeBytes = bytes?.size?.toLong() ?: 0L,
+                    sha256 = bytes?.let(::sha256Bytes) ?: "0".repeat(64))
+            }.distinctBy { it.id }.toList()
+            TargetArticleRecord(article.id.toString(), article.title, article.category, article.markdown, images)
+        }
+    }
+
+    private fun sha256Bytes(bytes: ByteArray) = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02x".format(it) }
 
     private suspend fun readSnapshot(selectedSets: Set<BackupExportSet>): Snapshot {
         val allReferences = database.referenceDao().allForBackup()
@@ -126,6 +148,23 @@ class BackupArchiveExporter(
             }
             row.relativePath to FileInputStream(file).use { it.readBytes() }
         }
+        val articles = if (BackupExportSet.ARTICLES in selectedSets) database.articleDao().allForBackup() else emptyList()
+        val articleImageBytes = linkedMapOf<String, ByteArray>()
+        articles.forEach { article ->
+            ARTICLE_IMAGE_REFERENCE.findAll(article.markdown).forEach { match ->
+                val relative = match.groupValues[2]
+                if (relative.startsWith('/') || relative.contains('\\') || relative.split('/').any { it == ".." || it == "." || it.isEmpty() })
+                    throw IOException("Référence d’image d’article invalide : $relative")
+                if (!relative.startsWith("images/")) throw IOException("Les images d’article doivent référencer images/<nom>.jpg : $relative")
+                val imageName = relative.removePrefix("images/")
+                if (!Regex("^[A-Za-z0-9._-]{1,100}\\.(jpg|jpeg)$", RegexOption.IGNORE_CASE).matches(imageName)) throw IOException("Nom d’image d’article non pris en charge : $relative")
+                val root = filesDir?.canonicalFile ?: throw IOException("Le stockage privé des images d’articles n’est pas configuré.")
+                val file = File(root, "article-images/${article.id}/$imageName").canonicalFile
+                if (!file.path.startsWith(root.path.trimEnd(File.separatorChar) + File.separator) || !file.isFile || file.length() > BackupArchiveValidator.MAX_IMAGE_BYTES)
+                    throw IOException("Image d’article absente ou invalide : ${article.id}/$imageName")
+                articleImageBytes["${article.id}/$imageName"] = FileInputStream(file).use { it.readBytes() }
+            }
+        }
         return Snapshot(
             references = references,
             teas = teas,
@@ -139,6 +178,8 @@ class BackupArchiveExporter(
             movements = if (BackupExportSet.TEAS in selectedSets) database.stockMovementDao().allForBackup() else emptyList(),
             photos = photoRows,
             photoBytes = photoBytes,
+            articles = articles,
+            articleImageBytes = articleImageBytes,
         )
     }
 
@@ -150,6 +191,8 @@ class BackupArchiveExporter(
         val tastings: List<TastingEntity>, val movements: List<StockMovementEntity>,
         val photos: List<TeaPhotoEntity> = emptyList(),
         val photoBytes: Map<String, ByteArray> = emptyMap(),
+        val articles: List<ArticleEntity> = emptyList(),
+        val articleImageBytes: Map<String, ByteArray> = emptyMap(),
     )
 
     internal object BackupArchiveWriter {
@@ -161,7 +204,32 @@ class BackupArchiveExporter(
                 payloads["photos/${photo.id}.jpg"] = "image/jpeg" to source
             }
             if (BackupExportSet.CONFIGURATION in sets) payloads["data/configuration.json"] = "application/json" to configurationJson(snapshot.references, prefs).toByteArray(Charsets.UTF_8)
-            if (BackupExportSet.ARTICLES in sets) payloads["articles/index.json"] = "application/json" to "{\"articles\":[]}".toByteArray()
+            if (BackupExportSet.ARTICLES in sets) {
+                val indexRows = JSONArray()
+                snapshot.articles.forEach { article ->
+                    val markdownPath = "articles/content/${article.id}.md"
+                    val sourceMarkdown = article.markdown
+                    val illustrations = JSONArray()
+                    val seenIllustrationPaths = mutableSetOf<String>()
+                    ARTICLE_IMAGE_REFERENCE.findAll(sourceMarkdown).forEach { match ->
+                        val name = match.groupValues[2].removePrefix("images/")
+                        val archivePath = "articles/media/${article.id}/$name"
+                        if (!seenIllustrationPaths.add(archivePath)) return@forEach
+                        val bytes = snapshot.articleImageBytes["${article.id}/$name"] ?: throw IllegalStateException("Image d’article absente : ${article.id}/$name")
+                        payloads[archivePath] = "image/jpeg" to bytes
+                        val alt = match.groupValues[1].ifBlank { null }
+                        illustrations.put(JSONObject().put("path", archivePath).putNullable("alt", alt))
+                    }
+                    val markdown = ARTICLE_IMAGE_REFERENCE.replace(sourceMarkdown) { match ->
+                        val imageName = match.groupValues[2].removePrefix("images/")
+                        match.value.replace(match.groupValues[2], "../media/${article.id}/$imageName")
+                    }
+                    payloads[markdownPath] = "text/markdown; charset=utf-8" to markdown.toByteArray(Charsets.UTF_8)
+                    indexRows.put(JSONObject().put("id", article.id.toString()).put("title", article.title).put("section", article.category)
+                        .put("markdownPath", markdownPath).put("illustrations", illustrations))
+                }
+                payloads["articles/index.json"] = "application/json" to JSONObject().put("articles", indexRows).toString().toByteArray(Charsets.UTF_8)
+            }
             val entries = JSONArray()
             payloads.forEach { (path, file) ->
                 entries.put(JSONObject()
@@ -274,6 +342,11 @@ class BackupArchiveExporter(
         private fun sha256(bytes: ByteArray) = java.security.MessageDigest.getInstance("SHA-256")
             .digest(bytes).joinToString("") { "%02x".format(it) }
         private fun JSONObject.putNullable(key: String, value: Any?) = put(key, value ?: JSONObject.NULL)
+    }
+
+    companion object {
+        /** Local article image references use portable images/<filename>.jpg paths in Markdown. */
+        internal val ARTICLE_IMAGE_REFERENCE = Regex("!\\[([^\\]]*)]\\(<?([^\\s)>]+)>?(?:\\s+\"[^\"]*\")?\\)")
     }
 }
 

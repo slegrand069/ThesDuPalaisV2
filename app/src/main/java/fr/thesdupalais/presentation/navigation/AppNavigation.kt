@@ -212,6 +212,8 @@ fun AppNavigation(container: AppContainer) {
                     factory = ArticlesViewModelFactory(
                         container.articleRepository,
                         container.articleJsonImporter,
+                        container.articlePackageImporter,
+                        container.articlePackageExporter,
                         context.contentResolver,
                     ),
                 )
@@ -239,14 +241,14 @@ fun AppNavigation(container: AppContainer) {
                     if (!navController.popBackStack()) navController.navigate(MainDestination.KNOWLEDGE.route)
                 }
                 if (articleId == null) {
-                    ArticleDetailScreen(fr.thesdupalais.presentation.articles.ArticleDetailState.Unavailable, onBack)
+                    ArticleDetailScreen(fr.thesdupalais.presentation.articles.ArticleDetailState.Unavailable, container.articleImageStore, onBack)
                 } else {
                     val detailViewModel: ArticleDetailViewModel = viewModel(
                         key = "article-detail-$articleId",
                         factory = ArticleDetailViewModelFactory(container.articleRepository, articleId),
                     )
                     val detailState by detailViewModel.state.collectAsStateWithLifecycle()
-                    ArticleDetailScreen(detailState, onBack)
+                    ArticleDetailScreen(detailState, container.articleImageStore, onBack)
                 }
             }
             composable(MainDestination.SETTINGS.route) {

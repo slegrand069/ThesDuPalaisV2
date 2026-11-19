@@ -102,6 +102,7 @@ class BackupOperationFinalizer(
         }
         if (entry.state == BackupOperationState.FINALIZING) journal.transition(operationId, BackupOperationState.COMPLETE)
         faultInjector.hit(FinalizationFaultPoint.AFTER_COMPLETE_BEFORE_MARKER_CLEAR)
+        if (target.replaceArticles) cleanupOrphanArticleImages()
         database.withTransaction {
             val currentMarker = database.backupOperationMarkerDao().findActive()
             require(currentMarker?.operationId == operationId && currentMarker.targetFingerprint == entry.targetFingerprint) {
@@ -153,6 +154,17 @@ class BackupOperationFinalizer(
         require(target.supersededImportDatasetIds.all { importRows[it]?.isSuperseded == true }) {
             "Les marqueurs des jeux d’import remplacés ne correspondent pas à l’état cible."
         }
+        if (target.articlesIncluded) {
+            val actualArticles = database.articleDao().allForBackup().associateBy { it.id.toString() }
+            val expectedArticles = target.articleRecords.associateBy { it.id }
+            require(actualArticles.size == expectedArticles.size && expectedArticles.all { (id, article) ->
+                actualArticles[id]?.let { it.title == article.title && it.category == article.category && it.markdown == article.markdown } == true
+            }) { "Les articles Room ne correspondent pas à l’état cible." }
+            target.articleRecords.flatMap { it.images }.forEach { image ->
+                val file = journal.privateMediaFile(image.relativePath)
+                verifyFile(file, image.sizeBytes, image.sha256)
+            }
+        }
     }
 
     private fun finalizeMedia(entry: DurableOperationEntry, target: BackupTargetState, photoId: String) {
@@ -160,6 +172,10 @@ class BackupOperationFinalizer(
         val staged = journal.stagedMediaFile(entry, photoId)
         if (artifact.imported) {
             val destination = journal.privateMediaFile(artifact.sourceRelativePath)
+            if (artifact.sourceRelativePath.startsWith("article-images/") && destination.exists() &&
+                (destination.length() != artifact.sizeBytes || sha256(destination) != artifact.sha256)) {
+                throw IOException("L’image d’article de destination existe avec un contenu différent; aucune image existante n’a été écrasée.")
+            }
             if (!destination.isFile || destination.length() != artifact.sizeBytes || sha256(destination) != artifact.sha256) {
                 val parent = destination.parentFile ?: throw IOException("Dossier de destination photo absent.")
                 if (!parent.isDirectory && !parent.mkdirs()) throw IOException("Création du dossier photo impossible.")
@@ -207,6 +223,23 @@ class BackupOperationFinalizer(
         val config = JSONObject(target.payloads["data/configuration.json"] ?: throw IOException("Configuration cible absente."))
         val prefs = config.getJSONObject("preferences")
         return UserPreferences(prefs.getLong("quantityPerCupMilliGrams"), prefs.getLong("lowStockThresholdMilliGrams"))
+    }
+
+    private suspend fun cleanupOrphanArticleImages() {
+        val root = journal.privateMediaFile("article-images")
+        if (!root.exists()) return
+        val keep = database.articleDao().allForBackup().flatMap { article ->
+            Regex("!\\[[^\\]]*]\\(<?images/([0-9a-fA-F-]{36}\\.jpg)>?(?:\\s+\"[^\"]*\")?\\)")
+                .findAll(article.markdown).map { "article-images/${article.id}/${it.groupValues[1]}" }.toList()
+        }.toSet()
+        root.listFiles()?.forEach { articleDir ->
+            if (!articleDir.isDirectory || articleDir.canonicalFile.parentFile != root.canonicalFile) return@forEach
+            articleDir.listFiles()?.forEach { file ->
+                val relative = "article-images/${articleDir.name}/${file.name}"
+                if (file.isFile && relative !in keep && !file.delete()) throw IOException("Nettoyage d’une image d’article orpheline impossible : $relative")
+            }
+            if (articleDir.listFiles().isNullOrEmpty() && !articleDir.delete()) throw IOException("Nettoyage d’un dossier d’image d’article impossible.")
+        }
     }
 
     private fun copyAndSync(source: File, destination: File) {

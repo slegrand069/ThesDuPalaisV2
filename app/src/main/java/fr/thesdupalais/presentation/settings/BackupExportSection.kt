@@ -36,6 +36,7 @@ import kotlinx.coroutines.launch
 internal fun BackupExportSection(exporter: BackupArchiveExporter) {
     var teas by remember { mutableStateOf(true) }
     var configuration by remember { mutableStateOf(true) }
+    var articles by remember { mutableStateOf(true) }
     var confirm by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var pendingSets by remember { mutableStateOf<Set<BackupExportSet>>(emptySet()) }
@@ -56,13 +57,13 @@ internal fun BackupExportSection(exporter: BackupArchiveExporter) {
             Text("Sauvegarder", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text("Créez une archive ZIP vérifiée des données choisies.", style = MaterialTheme.typography.bodyMedium)
-            Text("Avec l’ensemble Thés, le ZIP v2 inclut aussi les photos des fiches.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Avec les Thés, le ZIP v3 inclut les photos des fiches. Avec Articles, il inclut les articles et leurs images privées.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ExportChoice("Thés et données associées", teas, { teas = it }, "backup-set-teas")
             ExportChoice("Configuration et référentiels", configuration, { configuration = it }, "backup-set-configuration")
-            ExportChoice("Articles", false, {}, "backup-set-articles", enabled = false, supporting = "Disponible lorsque le modèle d’articles sera implémenté.")
+            ExportChoice("Articles et images", articles, { articles = it }, "backup-set-articles", supporting = "Un export JSON autonome ne transporte pas les fichiers image.")
             Button(
                 onClick = { confirm = true },
-                enabled = teas || configuration,
+                enabled = teas || configuration || articles,
                 modifier = Modifier.fillMaxWidth().testTag("backup-export-button"),
             ) { Text("Exporter la sélection…") }
             message?.let { Text(it, modifier = Modifier.padding(top = 10.dp).testTag("backup-export-message"), style = MaterialTheme.typography.bodySmall) }
@@ -72,10 +73,10 @@ internal fun BackupExportSection(exporter: BackupArchiveExporter) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("Créer une sauvegarde ?") },
-            text = { Text("Une archive ZIP sera créée pour : ${buildList { if (teas) add("les thés"); if (configuration) add("la configuration") }.joinToString(" et ")}.") },
+            text = { Text("Une archive ZIP v3 sera créée pour : ${buildList { if (teas) add("les thés"); if (configuration) add("la configuration"); if (articles) add("les articles") }.joinToString(" et ")}.") },
             confirmButton = {
                 TextButton(onClick = {
-                    pendingSets = buildSet { if (teas) add(BackupExportSet.TEAS); if (configuration) add(BackupExportSet.CONFIGURATION) }
+                    pendingSets = buildSet { if (teas) add(BackupExportSet.TEAS); if (configuration) add(BackupExportSet.CONFIGURATION); if (articles) add(BackupExportSet.ARTICLES) }
                     confirm = false
                     picker.launch("thes-du-palais-${LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"))}.zip")
                 }, modifier = Modifier.testTag("backup-export-confirm")) { Text("Choisir un fichier") }
