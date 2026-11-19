@@ -60,6 +60,7 @@ data class CatalogueTea(
     val stockMilliGrams: Long? = null,
     val tastingCount: Int = 0,
     val lastTastedAtEpochMillis: Long? = null,
+    val primaryPhotoPath: String? = null,
 )
 
 data class CatalogueCriteria(
@@ -403,6 +404,7 @@ internal fun TeaWithCatalogData.toCatalogueTea(): CatalogueTea = CatalogueTea(
     stockMilliGrams = tea.stockMilliGrams,
     tastingCount = tastings.size,
     lastTastedAtEpochMillis = tastings.maxOfOrNull { it.occurredAtEpochMillis },
+    primaryPhotoPath = photos.firstOrNull { it.isPrimary }?.relativePath,
 )
 
 internal fun CatalogueTea.toMadjoTeaProfile(): MadjoTeaProfile = MadjoTeaProfile(

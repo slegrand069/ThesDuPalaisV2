@@ -11,7 +11,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Pure input metadata which is not carried by backup v1. Paths are app-private relative paths. */
-data class TargetPhotoRecord(val id: String, val teaId: String, val relativePath: String, val position: Int)
+data class TargetPhotoRecord(
+    val id: String,
+    val teaId: String,
+    val relativePath: String,
+    val position: Int,
+    val isPrimary: Boolean = false,
+    /** Present only while a newly restored image is staged from a validated archive. */
+    val archivePath: String? = null,
+)
 data class TargetImportRecord(val datasetId: String, val contentSha256: String, val schemaVersion: Int, val isSuperseded: Boolean = false)
 
 enum class TargetOperation { REPLACE, MERGE }
@@ -83,7 +91,7 @@ object BackupTargetStateBuilder {
         return sha(buildString {
             append(plannerHash)
             photos.sortedWith(compareBy<TargetPhotoRecord> { it.id }).forEach {
-                append('|').append(it.id).append(':').append(it.teaId).append(':').append(it.relativePath).append(':').append(it.position)
+                append('|').append(it.id).append(':').append(it.teaId).append(':').append(it.relativePath).append(':').append(it.position).append(':').append(it.isPrimary)
             }
             importHistory.sortedBy { it.datasetId }.forEach {
                 append('|').append(it.datasetId).append(':').append(it.contentSha256).append(':').append(it.schemaVersion).append(':').append(it.isSuperseded)
@@ -106,7 +114,7 @@ object BackupTargetStateBuilder {
                 errors += "Les préférences métier de l’état cible sont invalides."
             }
             val teaIds = teas.array("teas").map { it.getString("id") }.toSet()
-            if (state.photosToKeep.any { it.teaId !in teaIds } || state.photosToQuarantine.any { it.teaId in teaIds }) {
+            if (state.photosToKeep.any { it.teaId !in teaIds }) {
                 errors += "Les métadonnées photo ne correspondent pas à l’appartenance des thés à l’état cible."
             }
             val allPhotoIds = state.photosToKeep.map { it.id } + state.photosToQuarantine.map { it.id }
@@ -117,9 +125,22 @@ object BackupTargetStateBuilder {
             (state.photosToKeep + state.photosToQuarantine).forEach { photo ->
                 if (photo.relativePath.isBlank() || photo.relativePath.startsWith('/') || '\\' in photo.relativePath || ':' in photo.relativePath ||
                     photo.relativePath.split('/').any { it.isBlank() || it == "." || it == ".." } || photo.position < 0 ||
+                    (photo.archivePath != null && photo.archivePath != "photos/${photo.id}.jpg") ||
                     runCatching { UUID.fromString(photo.id).toString() == photo.id && UUID.fromString(photo.teaId).toString() == photo.teaId }.getOrDefault(false).not()) {
                     errors += "Une métadonnée photo de l’état cible est invalide."
                 }
+            }
+            if (teas.has("photos")) {
+                state.photosToKeep.groupBy { it.teaId }.forEach { (teaId, rows) ->
+                    if (rows.size > 3 || rows.map { it.position }.sorted() != rows.indices.toList() || rows.count { it.isPrimary } != 1) {
+                        errors += "Le nombre, l’ordre ou la photo principale est invalide pour le thé $teaId."
+                    }
+                }
+                val jsonPhotos = teas.getJSONArray("photos").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+                if (jsonPhotos.size != state.photosToKeep.size || jsonPhotos.any { row ->
+                    state.photosToKeep.none { p -> p.id == row.optString("id") && p.teaId == row.optString("teaId") &&
+                        p.position == row.optInt("position", -1) && p.isPrimary == row.optBoolean("isPrimary") && row.optString("path") == "photos/${p.id}.jpg" }
+                    }) errors += "Les métadonnées photo JSON diffèrent de l’état Room cible."
             }
             state.supersededImportDatasetIds.forEach { id ->
                 if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false).not()) errors += "Un identifiant d’import remplacé est invalide."
@@ -133,6 +154,7 @@ object BackupTargetStateBuilder {
     private fun validationArchive(payloads: Map<String, String>): ByteArray {
         val normalizedPayloads = payloads.toMutableMap()
         val teasPayload = JSONObject(payloads.getValue("data/teas.json"))
+        teasPayload.remove("photos") // The strict v1 validator below checks the non-media tea contract; media is checked above.
         val configurationPayload = JSONObject(payloads.getValue("data/configuration.json"))
         val references = configurationPayload.array("references").associateBy { it.getString("id") }
         val required = buildSet {
@@ -152,7 +174,7 @@ object BackupTargetStateBuilder {
         }
         val manifest = JSONObject()
             .put("format", BackupArchiveValidator.FORMAT)
-            .put("schemaVersion", BackupArchiveValidator.SCHEMA_VERSION)
+            .put("schemaVersion", BackupArchiveValidator.LEGACY_SCHEMA_VERSION)
             .put("backupId", "123e4567-e89b-12d3-a456-426614174099")
             .put("createdAt", "2026-01-01T00:00:00Z")
             .put("producer", JSONObject().put("application", "ThésDuPalais").put("version", "target-state-validator"))
@@ -228,9 +250,36 @@ object BackupTargetStateBuilder {
             .onFailure { blockers += "Les dépendances de références des thés sont incohérentes : ${it.message ?: "références absentes"}." }
 
         val targetTeaIds = targetTea.array("teas").map { it.getString("id") }.toSet()
-        val keptPhotos = request.photos.filter { it.teaId in targetTeaIds }.sortedWith(compareBy<TargetPhotoRecord> { it.teaId }.thenBy { it.position }.thenBy { it.id })
-        val removedPhotos = request.photos.filter { it.teaId !in targetTeaIds }
-        if (removedPhotos.isNotEmpty()) warnings += "${removedPhotos.size} photo(s) associée(s) à des thés retirés doivent être mises en quarantaine lors de l’application. Les images ne sont pas transportées par ZIP v1."
+        val localPhotoById = request.photos.associateBy { it.id }
+        val incomingTeaIds = if ("teas" in request.selectedSets) incomingTea?.array("teas")?.map { it.getString("id") }?.toSet().orEmpty() else emptySet()
+        val useV2Photos = "teas" in request.selectedSets && archive.schemaVersion >= BackupArchiveValidator.SCHEMA_VERSION
+        val desiredPhotos = mutableListOf<TargetPhotoRecord>()
+        if (useV2Photos) {
+            val incomingRows = incomingPhotoRecords(archive, incomingTeaIds.intersect(targetTeaIds))
+            incomingRows.forEach { imported ->
+                val localRow = localPhotoById[imported.id]
+                if (localRow != null) {
+                    val localBytes = local.entries[localImagePath(localRow.id)]
+                    val incomingBytes = archive.entries[imported.archivePath]
+                    if (localRow.teaId != imported.teaId || localRow.position != imported.position || localRow.isPrimary != imported.isPrimary ||
+                        localRow.relativePath != imported.relativePath || localBytes == null || incomingBytes == null || !localBytes.contentEquals(incomingBytes)) {
+                        blockers += "L’identifiant de photo ${imported.id} existe déjà avec un contenu local différent."
+                    } else desiredPhotos += localRow
+                } else desiredPhotos += imported
+            }
+        }
+        val desiredLocalTeaIds = targetTeaIds - incomingTeaIds
+        if (!useV2Photos) desiredPhotos += request.photos.filter { it.teaId in targetTeaIds }
+        else desiredPhotos += request.photos.filter { it.teaId in desiredLocalTeaIds }
+        val keptPhotos = desiredPhotos.sortedWith(compareBy<TargetPhotoRecord> { it.teaId }.thenBy { it.position }.thenBy { it.id })
+        targetTea.put("photos", JSONArray(keptPhotos.map { photo ->
+            JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("path", "photos/${photo.id}.jpg")
+                .put("position", photo.position).put("isPrimary", photo.isPrimary)
+        }))
+        payloads["data/teas.json"] = targetTea
+        val keptIdentity = keptPhotos.map { it.id to it.relativePath }.toSet()
+        val removedPhotos = request.photos.filter { (it.id to it.relativePath) !in keptIdentity }
+        if (removedPhotos.isNotEmpty()) warnings += "${removedPhotos.size} photo(s) locale(s) absente(s) de l’état cible seront mises en quarantaine puis supprimées après validation de la restauration."
         val superseded = if (payloadCanonical(targetTea, targetConfig) != payloadCanonical(localTea, localConfig)) request.importHistory.map { it.datasetId }.toSortedSet() else emptySet()
         val state = if (blockers.isEmpty()) BackupTargetState(
             payloads = payloads.mapValues { canonicalJson(it.value) }.toSortedMap(),
@@ -244,6 +293,26 @@ object BackupTargetStateBuilder {
         val changeOrder = compareBy<TargetChange> { it.set }.thenBy { it.identity }.thenBy { it.action }.thenBy { it.fields.joinToString() }
         return BackupTargetResult(state, changes.sortedWith(changeOrder), preserved.sortedWith(changeOrder), warnings.distinct().sorted(), blockers.distinct().sorted(), fingerprints)
     }
+
+    private fun incomingPhotoRecords(archive: BackupArchiveValidator.ValidatedArchive, teaIds: Set<String>): List<TargetPhotoRecord> {
+        val teas = obj(archive, "data/teas.json") ?: return emptyList()
+        if (!teas.has("photos")) return emptyList()
+        return teas.getJSONArray("photos").let { rows -> (0 until rows.length()).map { i ->
+            val row = rows.getJSONObject(i)
+            val id = row.getString("id")
+            val teaId = row.getString("teaId")
+            if (teaId !in teaIds) null else TargetPhotoRecord(
+                id = id,
+                teaId = teaId,
+                relativePath = "tea-photos/$id.jpg",
+                position = row.getInt("position"),
+                isPrimary = row.getBoolean("isPrimary"),
+                archivePath = row.getString("path"),
+            )
+        }.filterNotNull() }
+    }
+
+    private fun localImagePath(photoId: String) = "photos/$photoId.jpg"
 
     private fun replace(
         selected: Set<String>, incomingTea: JSONObject?, incomingConfig: JSONObject?, payloads: MutableMap<String, JSONObject>,
@@ -533,12 +602,18 @@ object BackupTargetStateBuilder {
         p?.blockingConflicts?.sorted()?.forEach { append("|conflict:").append(it) }
         p?.referenceIdRemap?.toSortedMap()?.forEach { (from, to) -> append("|reference:").append(from).append(':').append(to) }
     }
-    private fun digestState(s: BackupTargetState) = sha(
-        s.payloads.toSortedMap().entries.joinToString("\n") { "${it.key}\u0000${canonical(JSONObject(it.value))}" } +
-            "\nkeep\n" + s.photosToKeep.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") { "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" } +
-            "\nquarantine\n" + s.photosToQuarantine.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") { "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" } +
-            "\nsuperseded\n" + s.supersededImportDatasetIds.sorted().joinToString("\n"),
-    )
+    private fun digestState(s: BackupTargetState): String {
+        val legacy = s.payloads["data/teas.json"]?.let { runCatching { !JSONObject(it).has("photos") }.getOrDefault(false) } == true &&
+            (s.photosToKeep + s.photosToQuarantine).all { !it.isPrimary && it.archivePath == null }
+        val keep = s.photosToKeep.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") {
+            if (legacy) "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" else "${it.id}|${it.teaId}|${it.relativePath}|${it.position}|${it.isPrimary}|${it.archivePath.orEmpty()}"
+        }
+        val quarantine = s.photosToQuarantine.sortedWith(compareBy({ it.id }, { it.teaId }, { it.position }, { it.relativePath })).joinToString("\n") {
+            if (legacy) "${it.id}|${it.teaId}|${it.relativePath}|${it.position}" else "${it.id}|${it.teaId}|${it.relativePath}|${it.position}|${it.isPrimary}"
+        }
+        return sha(s.payloads.toSortedMap().entries.joinToString("\n") { "${it.key}\u0000${canonical(JSONObject(it.value))}" } +
+            "\nkeep\n$keep\nquarantine\n$quarantine\nsuperseded\n" + s.supersededImportDatasetIds.sorted().joinToString("\n"))
+    }
     private fun payloadCanonical(a: JSONObject, b: JSONObject) = canonical(a) + canonical(b)
     private fun sha(text: String) = sha(text.toByteArray(StandardCharsets.UTF_8))
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

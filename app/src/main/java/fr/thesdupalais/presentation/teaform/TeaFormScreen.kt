@@ -1,6 +1,16 @@
 package fr.thesdupalais.presentation.teaform
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.FileProvider
+import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
+import java.io.File
+import java.util.UUID
+import fr.thesdupalais.presentation.photos.TeaPhotoImage
+import fr.thesdupalais.presentation.photos.PhotoViewer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -43,7 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.thesdupalais.domain.model.ReferenceKind
 import fr.thesdupalais.domain.model.ReferenceValue
-import java.util.UUID
+import fr.thesdupalais.domain.quantity.formatGrams
 
 @Composable
 fun TeaFormScreen(viewModel: TeaFormViewModel, onCancel: () -> Unit, onSaved: (UUID) -> Unit) {
@@ -59,6 +70,17 @@ internal fun TeaFormContent(
     onSaved: (UUID) -> Unit,
 ) {
     var showAbandonDialog by remember { mutableStateOf(false) }
+    var photoToDelete by remember { mutableStateOf<UUID?>(null) }
+    var viewerIndex by remember { mutableStateOf<Int?>(null) }
+    val context = LocalContext.current
+    var captureFile by remember { mutableStateOf<File?>(null) }
+    val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val file = captureFile
+        captureFile = null
+        if (success && file != null) viewModel.addPhoto(Uri.fromFile(file))
+        file?.delete()
+    }
+    val pickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(viewModel::addPhoto) }
     var selectionKind by remember { mutableStateOf<ReferenceKind?>(null) }
     val requestCancel = { if (state.isDirty) showAbandonDialog = true else onCancel() }
     BackHandler(enabled = state.isDirty || state.isSaving) {
@@ -98,6 +120,28 @@ internal fun TeaFormContent(
             modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            FormCard("Photos", "tea-form-photos") {
+                if (state.photos.isEmpty()) Text("Aucune photo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                state.photos.forEachIndexed { index, photo ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TeaPhotoImage(photo.pendingFile?.absolutePath ?: photo.relativePath, Modifier.size(76.dp, 64.dp).clickable { viewerIndex = index })
+                        Text(if (photo.isPrimary) "Principale" else "Photo ${index + 1}", Modifier.weight(1f))
+                        TextButton(onClick = { viewModel.setPrimaryPhoto(photo.id) }, enabled = !photo.isPrimary) { Text("★") }
+                        TextButton(onClick = { photoToDelete = photo.id }) { Text("×", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+                if (state.photos.size < 3) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { pickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("Choisir une photo") }
+                        TextButton(onClick = {
+                            val directory = File(context.cacheDir, "photo-capture").apply { mkdirs() }
+                            val file = File(directory, "${UUID.randomUUID()}.jpg")
+                            captureFile = file
+                            captureLauncher.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", file))
+                        }) { Text("Prendre une photo") }
+                    }
+                } else Text("Maximum de trois photos atteint.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            }
             FormCard("Identité", "tea-form-identity") {
                 OutlinedTextField(
                     value = state.name,
@@ -108,14 +152,12 @@ internal fun TeaFormContent(
                 )
             }
             FormCard("Stock actuel", "tea-form-stock") {
-                OutlinedTextField(
-                    value = state.stockInput,
-                    onValueChange = viewModel::updateStock,
-                    label = { Text("Quantité en grammes") },
-                    supportingText = { Text("Facultatif. Laissez vide si le stock est inconnu.") },
-                    modifier = Modifier.fillMaxWidth().testTag("tea-form-stock-input"),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
+                Text(
+                    text = state.stockMilliGrams?.let { "${formatGrams(it)} g" }
+                        ?: if (state.editTeaId == null) "Stock inconnu · à initialiser dans Inventaire après création"
+                        else "Stock inconnu",
+                    modifier = Modifier.fillMaxWidth().testTag("tea-form-stock-readonly"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             FormCard("Catégorie et statut", "tea-form-category-status") {
@@ -218,6 +260,13 @@ internal fun TeaFormContent(
             }
         }
     }
+    photoToDelete?.let { id ->
+        AlertDialog(onDismissRequest = { photoToDelete = null }, title = { Text("Supprimer cette photo ?") },
+            text = { Text("La suppression sera appliquée uniquement si vous enregistrez la fiche.") },
+            confirmButton = { TextButton(onClick = { viewModel.removePhoto(id); photoToDelete = null }) { Text("Supprimer") } },
+            dismissButton = { TextButton(onClick = { photoToDelete = null }) { Text("Annuler") } })
+    }
+    viewerIndex?.let { PhotoViewer(state.photos.map { photo -> photo.pendingFile?.absolutePath ?: photo.relativePath }, it) { viewerIndex = null } }
 
     if (showAbandonDialog) {
         AlertDialog(

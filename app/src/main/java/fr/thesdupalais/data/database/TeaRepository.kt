@@ -8,6 +8,7 @@ import java.text.Normalizer
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import fr.thesdupalais.data.operation.BackupOperationWriteCoordinator
 
 data class NewTea(
@@ -48,12 +49,15 @@ data class InventoryTeaChange(
 enum class TeaEditableField {
     NAME, CATEGORY, STATUS, CONTAINER, COUNTRIES, REGIONS, AROMAS, PROFILES, MOMENTS, BADGES,
     TASTE_RATING, OLFACTORY_RATING, PERSONAL_NOTES, DESCRIPTION, TECHNICAL_INFORMATION,
-    BREW_TEMPERATURE, INFUSION_DURATION, STOCK,
+    BREW_TEMPERATURE, INFUSION_DURATION,
 }
+
+data class StockRepairResult(val insertedMovementCount: Int, val findings: List<String>)
 
 class TeaRepository(
     private val database: AppDatabase,
     private val writeCoordinator: BackupOperationWriteCoordinator = BackupOperationWriteCoordinator(),
+    private val photoStore: TeaPhotoStore? = null,
 ) {
     /** Applies a fully validated inventory batch atomically; stock edits are absolute values. */
     suspend fun applyInventoryChanges(changes: List<InventoryTeaChange>): Int = writeCoordinator.withWritePermit {
@@ -75,26 +79,31 @@ class TeaRepository(
                 val nextStock = if (change.changeStock) requireNotNull(change.stockMilliGrams) else old.stockMilliGrams
                 val containerChanged = nextContainer != old.containerRefId
                 val stockChanged = nextStock != old.stockMilliGrams
-                val movement = if (stockChanged && nextStock != null) {
+                val generatedMovements = if (stockChanged && nextStock != null) {
                     val existing = movements.findForTea(change.teaId)
-                    val now = System.currentTimeMillis()
                     val previous = existing.lastOrNull()
-                    if (old.stockMilliGrams == null || previous == null) {
-                        StockMovementEntity(UUID.randomUUID(), change.teaId, "INVENTORY", null, nextStock, now, now, null, "Inventaire")
+                    var now = nextMovementTime(existing, System.currentTimeMillis())
+                    if (previous == null && old.stockMilliGrams == null) {
+                        listOf(StockMovementEntity(UUID.randomUUID(), change.teaId, "INVENTORY", null, nextStock, now, now, null, "Inventaire"))
+                    } else if (previous == null) {
+                        val oldStock = requireNotNull(old.stockMilliGrams)
+                        val baseline = StockMovementEntity(UUID.randomUUID(), change.teaId, "INVENTORY", null, oldStock, now, now, null, "Régularisation de l’état de stock préexistant")
+                        now = Math.addExact(now, 1L)
+                        listOf(baseline, StockMovementEntity(UUID.randomUUID(), change.teaId, "CORRECTION", Math.subtractExact(nextStock, oldStock), nextStock, now, now, null, "Correction d’inventaire"))
                     } else {
                         val delta = Math.subtractExact(nextStock, previous.stockAfterMilliGrams)
                         check(delta != 0L) { "Le stock n’a pas changé." }
-                        StockMovementEntity(UUID.randomUUID(), change.teaId, "CORRECTION", delta, nextStock, now, now, null, "Correction d’inventaire")
+                        listOf(StockMovementEntity(UUID.randomUUID(), change.teaId, "CORRECTION", delta, nextStock, now, now, null, "Correction d’inventaire"))
                     }
-                } else null
-                PreparedInventoryChange(change.teaId, nextContainer, nextStock, containerChanged || stockChanged, movement)
+                } else emptyList()
+                PreparedInventoryChange(change.teaId, nextContainer, nextStock, containerChanged || stockChanged, generatedMovements)
             }
             var updated = 0
             prepared.filter(PreparedInventoryChange::changed).forEach { item ->
                 check(teas.updateInventoryFields(item.teaId, item.containerId, item.stockMilliGrams) == 1) {
                     "Une fiche n’a pas pu être mise à jour. Aucune modification n’a été conservée."
                 }
-                item.movement?.let { movement -> movements.insert(movement) }
+                for (movement in item.movements) movements.insert(movement)
                 updated++
             }
             updated
@@ -103,8 +112,12 @@ class TeaRepository(
 
     private data class PreparedInventoryChange(
         val teaId: UUID, val containerId: UUID?, val stockMilliGrams: Long?, val changed: Boolean,
-        val movement: StockMovementEntity?,
+        val movements: List<StockMovementEntity>,
     )
+    private fun nextMovementTime(movements: List<StockMovementEntity>, now: Long): Long {
+        val last = movements.maxOfOrNull { maxOf(it.occurredAtEpochMillis, it.recordedAtEpochMillis) } ?: return now
+        return maxOf(now, Math.addExact(last, 1L))
+    }
     /** Removes a tea from the active catalogue without deleting its record or related tasting history. */
     suspend fun archiveTea(teaId: UUID): Boolean = writeCoordinator.withWritePermit {
         database.withTransaction {
@@ -125,12 +138,8 @@ class TeaRepository(
                 val tea = database.teaDao().findActiveById(teaId)
                     ?: throw IllegalStateException("Ce thé n’est plus disponible dans la collection.")
                 val tastingId = UUID.randomUUID()
-                tea.stockMilliGrams?.let { stock ->
-                    val remaining = (stock - consumedMilliGrams).coerceAtLeast(0L)
-                    check(database.teaDao().updateStock(teaId, remaining) == 1) {
-                        "Le stock du thé n’a pas pu être mis à jour."
-                    }
-                }
+                val existingMovements = if (tea.stockMilliGrams == null) emptyList() else database.stockMovementDao().findForTea(teaId)
+                val movementTime = nextMovementTime(existingMovements, recordedAt)
                 database.tastingDao().insert(
                     TastingEntity(
                         id = tastingId,
@@ -140,6 +149,17 @@ class TeaRepository(
                         consumedMilliGrams = consumedMilliGrams,
                     ),
                 )
+                tea.stockMilliGrams?.let { stock ->
+                    require(consumedMilliGrams <= stock) { "La quantité consommée dépasse le stock connu." }
+                    val remaining = Math.subtractExact(stock, consumedMilliGrams)
+                    check(database.teaDao().updateStock(teaId, remaining) == 1) {
+                        "Le stock du thé n’a pas pu être mis à jour."
+                    }
+                    database.stockMovementDao().insert(
+                        StockMovementEntity(UUID.randomUUID(), teaId, "CONSUMPTION", -consumedMilliGrams, remaining,
+                            movementTime, recordedAt, tastingId, "Dégustation"),
+                    )
+                }
                 tastingId
             }
         }
@@ -155,14 +175,17 @@ class TeaRepository(
                         ?: throw IllegalStateException("La fiche du thé n’est plus disponible.")
                     val stock = tea.stockMilliGrams
                     if (stock != null) {
-                        val restored = try {
-                            Math.addExact(stock, consumed)
-                        } catch (_: ArithmeticException) {
-                            Long.MAX_VALUE
-                        }
+                        val restored = Math.addExact(stock, consumed)
                         check(database.teaDao().updateStock(teaId, restored) == 1) {
                             "Le stock du thé n’a pas pu être mis à jour."
                         }
+                        val linked = database.stockMovementDao().findForTea(teaId).firstOrNull { it.tastingId == tastingId }
+                        linked?.let { database.stockMovementDao().update(it.copy(tastingId = null)) }
+                        val now = nextMovementTime(database.stockMovementDao().findForTea(teaId), System.currentTimeMillis())
+                        database.stockMovementDao().insert(
+                            StockMovementEntity(UUID.randomUUID(), teaId, "CORRECTION", consumed, restored,
+                                now, now, null, "Régularisation après suppression d’une dégustation"),
+                        )
                     }
                 }
                 check(database.tastingDao().deleteForTea(tastingId, teaId) == 1) {
@@ -217,6 +240,55 @@ class TeaRepository(
         )
     }
 
+    /** One-time, conservative repair for balances written without a matching stock ledger. */
+    suspend fun repairLegacyStockHistory(): StockRepairResult = writeCoordinator.withWritePermit {
+        database.withTransaction {
+            val movementsByTea = database.stockMovementDao().allForBackup().groupBy { it.teaId }
+            val findings = mutableListOf<String>()
+            var inserted = 0
+            val now = System.currentTimeMillis()
+            database.teaDao().allForBackup().forEach { tea ->
+                val plan = StockHistoryRepair.plan(tea.id, tea.stockMilliGrams, movementsByTea[tea.id].orEmpty(), now)
+                if (plan.problem != null) findings += "${tea.id}: ${plan.problem}"
+                for (movement in plan.additions) database.stockMovementDao().insert(movement)
+                inserted += plan.additions.size
+            }
+            StockRepairResult(inserted, findings)
+        }
+    }
+
+    suspend fun photosForTea(teaId: UUID): List<TeaPhotoEntity> = database.teaPhotoDao().observeForTea(teaId).let { flow ->
+        flow.first()
+    }
+
+    fun importPhoto(uri: android.net.Uri): TeaPhotoDraft = requireNotNull(photoStore) { "Le stockage des photos est indisponible." }.import(uri)
+    fun discardPendingPhoto(photo: TeaPhotoDraft) { photoStore?.deletePending(photo) }
+
+    suspend fun savePhotos(teaId: UUID, photos: List<TeaPhotoDraft>) = writeCoordinator.withWritePermit {
+        val normalized = TeaPhotoSelection.normalize(photos)
+        val finalized = mutableListOf<TeaPhotoDraft>()
+        try {
+            normalized.filter { it.pendingFile != null }.forEach { photo ->
+                requireNotNull(photoStore) { "Le stockage des photos est indisponible." }.finalizePending(photo)
+                finalized += photo
+            }
+            val oldPhotos = database.teaPhotoDao().allForBackup().filter { it.teaId == teaId }
+            database.withTransaction {
+                require(database.teaDao().findById(teaId) != null) { "La fiche du thé n’existe plus." }
+                database.teaPhotoDao().deleteForTea(teaId)
+                if (normalized.isNotEmpty()) database.teaPhotoDao().insertAll(normalized.mapIndexed { index, photo ->
+                    TeaPhotoEntity(photo.id, teaId, photo.relativePath, index, photo.isPrimary)
+                })
+            }
+            val remaining = normalized.map { it.relativePath }.toSet()
+            oldPhotos.filter { it.relativePath !in remaining }.forEach { photoStore?.deleteRelative(it.relativePath) }
+        } catch (error: Throwable) {
+            finalized.forEach { photoStore?.deleteRelative(it.relativePath) }
+            normalized.filter { it.pendingFile != null }.forEach { photoStore?.deletePending(it) }
+            throw error
+        }
+    }
+
     suspend fun create(tea: NewTea): UUID = writeCoordinator.withWritePermit {
         try {
             createInTransaction(tea)
@@ -225,6 +297,28 @@ class TeaRepository(
                 "Une valeur sélectionnée n’est plus compatible. La fiche n’a pas été enregistrée.",
                 error,
             )
+        }
+    }
+
+    suspend fun createWithPhotos(tea: NewTea, photos: List<TeaPhotoDraft>): UUID = writeCoordinator.withWritePermit {
+        val normalized = TeaPhotoSelection.normalize(photos)
+        val finalized = mutableListOf<TeaPhotoDraft>()
+        try {
+            normalized.filter { it.pendingFile != null }.forEach { photo ->
+                requireNotNull(photoStore) { "Le stockage des photos est indisponible." }.finalizePending(photo)
+                finalized += photo
+            }
+            database.withTransaction {
+                val teaId = createInTransaction(tea)
+                if (normalized.isNotEmpty()) database.teaPhotoDao().insertAll(normalized.mapIndexed { index, photo ->
+                    TeaPhotoEntity(photo.id, teaId, photo.relativePath, index, photo.isPrimary)
+                })
+                teaId
+            }
+        } catch (error: Throwable) {
+            finalized.forEach { photoStore?.deleteRelative(it.relativePath) }
+            normalized.filter { it.pendingFile != null }.forEach { photoStore?.deletePending(it) }
+            throw error
         }
     }
 
@@ -262,7 +356,7 @@ class TeaRepository(
             val technicalInformation = if (TeaEditableField.TECHNICAL_INFORMATION in changedFields) normalizeOptional(tea.technicalInformation) else oldTea.technicalInformation
             val temperature = if (TeaEditableField.BREW_TEMPERATURE in changedFields) tea.brewTemperatureCelsius else oldTea.brewTemperatureCelsius
             val duration = if (TeaEditableField.INFUSION_DURATION in changedFields) tea.infusionDurationSeconds else oldTea.infusionDurationSeconds
-            val stock = if (TeaEditableField.STOCK in changedFields) tea.stockMilliGrams else oldTea.stockMilliGrams
+            val stock = oldTea.stockMilliGrams
 
             requireRating(tasteRating, "La note gustative")
             requireRating(olfactoryRating, "La note olfactive")
@@ -379,6 +473,7 @@ class TeaRepository(
             "La durée d’infusion doit être supérieure à zéro seconde."
         }
         require(tea.stockMilliGrams == null || tea.stockMilliGrams >= 0) { "Le stock ne peut pas être négatif." }
+        require(tea.stockMilliGrams == null) { "Initialisez le stock depuis l’écran Inventaire après la création de la fiche." }
 
         val referenceDao = database.referenceDao()
         suspend fun requireReference(id: UUID, kind: ReferenceKind): ReferenceEntity {

@@ -21,6 +21,7 @@ import fr.thesdupalais.data.database.TeaCountryEntity
 import fr.thesdupalais.data.database.TeaEntity
 import fr.thesdupalais.data.database.TeaMomentEntity
 import fr.thesdupalais.data.database.TeaRegionEntity
+import fr.thesdupalais.data.database.TeaPhotoEntity
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
 import fr.thesdupalais.domain.references.ReferenceLabelNormalizer
 import java.io.IOException
@@ -109,7 +110,7 @@ class BackupRoomOperationApplier(
                 require(localFingerprint == entry.localSnapshotSha256) {
                     "La collection locale a changé depuis la prévisualisation ; l’opération préparée est périmée."
                 }
-                val expectedPhotoRecords = (target.photosToKeep + target.photosToQuarantine).sortedWith(photoOrder)
+                val expectedPhotoRecords = (target.photosToKeep.filter { it.archivePath == null } + target.photosToQuarantine).sortedWith(photoOrder)
                 require(local.photos.sortedWith(photoOrder) == expectedPhotoRecords) {
                     "Les métadonnées photo locales diffèrent de l’état préparé."
                 }
@@ -119,6 +120,7 @@ class BackupRoomOperationApplier(
                 val changedMovementIds = removeObsoleteHistory(rows.tastings, rows.movements)
                 applyTeas(rows.teas)
                 applyAssociations(rows)
+                applyPhotos(rows.photos)
                 writeTargetHistory(rows.tastings, rows.movements, changedMovementIds)
                 deleteObsoleteReferences(rows.references.map { it.id }.toSet())
                 if (target.supersededImportDatasetIds.isNotEmpty()) {
@@ -248,6 +250,12 @@ class BackupRoomOperationApplier(
         (rows.badges.toSet() - currentBadges).takeIf { it.isNotEmpty() }?.let { dao.insertBadges(it.toList()) }
     }
 
+    private suspend fun applyPhotos(target: List<TeaPhotoEntity>) {
+        val dao = database.teaPhotoDao()
+        dao.deleteAll()
+        if (target.isNotEmpty()) dao.insertAll(target)
+    }
+
     private suspend fun deleteObsoleteReferences(targetIds: Set<UUID>) {
         database.referenceDao().allForBackup()
             .filter { it.id !in targetIds }
@@ -262,6 +270,7 @@ class BackupRoomOperationApplier(
         val regions: List<TeaRegionEntity>, val aromas: List<TeaAromaEntity>, val profiles: List<TeaAromaticProfileEntity>,
         val moments: List<TeaMomentEntity>, val badges: List<TeaBadgeEntity>, val tastings: List<TastingEntity>,
         val movements: List<StockMovementEntity>,
+        val photos: List<TeaPhotoEntity>,
     )
 
     private fun parseTarget(target: BackupTargetState): ParsedTarget {
@@ -312,7 +321,10 @@ class BackupRoomOperationApplier(
         val movements = teaPayload.getJSONArray("stockMovements").objects().map { row ->
             StockMovementEntity(row.uuid("id"), row.uuid("teaId"), row.getString("kind"), row.longOrNull("deltaMilliGrams"), row.getLong("stockAfterMilliGrams"), row.instantMillis("occurredAt"), row.instantMillis("recordedAt"), row.uuidOrNull("tastingId"), row.stringOrNull("note"))
         }
-        return ParsedTarget(references, teas, countries, regions, aromas, profiles, moments, badges, tastings, movements)
+        val photos = target.photosToKeep.map { photo ->
+            TeaPhotoEntity(UUID.fromString(photo.id), UUID.fromString(photo.teaId), photo.relativePath, photo.position, photo.isPrimary)
+        }
+        return ParsedTarget(references, teas, countries, regions, aromas, profiles, moments, badges, tastings, movements, photos)
     }
 
     private fun JSONObject.uuid(key: String): UUID = UUID.fromString(getString(key)).also { require(it.toString() == getString(key)) { "UUID non canonique : $key." } }

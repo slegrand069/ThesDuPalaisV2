@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.UUID
+import fr.thesdupalais.presentation.photos.TeaPhotoImage
 import fr.thesdupalais.domain.madjo.MadjoConversationState
 import fr.thesdupalais.domain.madjo.MadjoCriterion
 import fr.thesdupalais.domain.madjo.MadjoMessage
@@ -608,7 +609,7 @@ private fun CatalogueTeaRow(tea: CatalogueTea, onClick: () -> Unit) {
             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 88.dp).padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            TeaCategoryPlaceholder(tea.categoryKey)
+            if (tea.primaryPhotoPath != null) TeaPhotoImage(tea.primaryPhotoPath, Modifier.size(64.dp, 64.dp)) else TeaCategoryPlaceholder(tea.categoryKey)
             Spacer(Modifier.width(12.dp))
             Column(
                 modifier = Modifier.weight(1f),

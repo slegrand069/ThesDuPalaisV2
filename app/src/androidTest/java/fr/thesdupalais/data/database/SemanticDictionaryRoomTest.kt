@@ -263,7 +263,7 @@ class SemanticDictionaryRoomTest {
         SemanticDictionarySeeder(database).seed()
         val repository = SemanticDictionaryRepository(database)
         val category = requireNotNull(database.referenceDao().findBySemanticKey("CATEGORY", "GREEN"))
-        val teaId = TeaRepository(database).create(NewTea("Thé préservé", category.id, stockMilliGrams = 12_000L))
+        val teaId = TeaRepository(database).create(NewTea("Thé préservé", category.id))
         val teaBefore = requireNotNull(database.teaDao().findById(teaId))
         val before = SemanticDictionaryArchiveJson.encode(repository.exportArchive())
         val referenceCount = database.referenceDao().allForBackup().size

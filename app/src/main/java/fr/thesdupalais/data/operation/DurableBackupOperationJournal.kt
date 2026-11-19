@@ -42,6 +42,7 @@ data class DurableMediaArtifact(
     val stagedFileName: String,
     val sizeBytes: Long,
     val sha256: String,
+    val imported: Boolean = false,
 )
 
 enum class PreparationFaultPoint { AFTER_PREPARING_JOURNAL, AFTER_ARCHIVE_COPY, AFTER_TARGET_COPY, BEFORE_PREPARED }
@@ -126,7 +127,7 @@ class DurableBackupOperationJournal(
             val stagedMedia = if (existing?.mediaArtifacts?.isNotEmpty() == true) {
                 verifyMediaArtifacts(operationDir, existing.mediaArtifacts)
                 existing.mediaArtifacts
-            } else stageMedia(operationDir, target.photosToQuarantine)
+            } else stageMedia(operationDir, target.photosToQuarantine, target.photosToKeep.filter { it.archivePath != null }, archiveBytes)
             entry = entry.copy(mediaArtifacts = stagedMedia)
             writeEntry(operationDir, entry)
             verifyArtifacts(entry)
@@ -251,12 +252,15 @@ class DurableBackupOperationJournal(
         if (BackupTargetStateBuilder.fingerprintTargetState(decodedTarget) != entry.targetFingerprint) {
             throw IOException("L’état cible durable ne correspond pas à l’empreinte confirmée.")
         }
-        val expectedPhotos = decodedTarget.photosToQuarantine.associateBy { it.id }
-        if (expectedPhotos.size != decodedTarget.photosToQuarantine.size || expectedPhotos.keys != entry.mediaArtifacts.map { it.photoId }.toSet()) {
-            throw IOException("Les fichiers médias préparés ne correspondent pas aux photos à mettre en quarantaine.")
+        val expectedPhotos = (decodedTarget.photosToQuarantine.map { it.id to (it.relativePath to false) } +
+            decodedTarget.photosToKeep.filter { it.archivePath != null }.map { it.id to (it.relativePath to true) }).toMap()
+        if (expectedPhotos.size != decodedTarget.photosToQuarantine.size + decodedTarget.photosToKeep.count { it.archivePath != null } ||
+            expectedPhotos.keys != entry.mediaArtifacts.map { it.photoId }.toSet()) {
+            throw IOException("Les fichiers médias préparés ne correspondent pas aux photos à restaurer ou mettre en quarantaine.")
         }
         entry.mediaArtifacts.forEach { artifact ->
-            if (expectedPhotos[artifact.photoId]?.relativePath != artifact.sourceRelativePath) throw IOException("Chemin source de média incohérent.")
+            val expected = expectedPhotos[artifact.photoId] ?: throw IOException("Photo préparée sans cible.")
+            if (expected.first != artifact.sourceRelativePath || expected.second != artifact.imported) throw IOException("Chemin source de média incohérent.")
         }
         verifyMediaArtifacts(dir, entry.mediaArtifacts)
     }
@@ -288,7 +292,8 @@ class DurableBackupOperationJournal(
                 .put("sourceRelativePath", artifact.sourceRelativePath)
                 .put("stagedFileName", artifact.stagedFileName)
                 .put("sizeBytes", artifact.sizeBytes)
-                .put("sha256", artifact.sha256))
+                .put("sha256", artifact.sha256)
+                .put("imported", artifact.imported))
         }
         val json = JSONObject()
             .put("journalVersion", JOURNAL_VERSION)
@@ -335,14 +340,16 @@ class DurableBackupOperationJournal(
             val mediaArray = json.getJSONArray("mediaArtifacts")
             val mediaArtifacts = (0 until mediaArray.length()).map { index ->
                 val row = mediaArray.getJSONObject(index)
-                if (row.keys().asSequence().toSet() != setOf("photoId", "sourceRelativePath", "stagedFileName", "sizeBytes", "sha256")) throw IOException("Métadonnée média absente ou inconnue.")
+                val rowKeys = row.keys().asSequence().toSet()
+                val oldKeys = setOf("photoId", "sourceRelativePath", "stagedFileName", "sizeBytes", "sha256")
+                if (rowKeys != oldKeys && rowKeys != oldKeys + "imported") throw IOException("Métadonnée média absente ou inconnue.")
                 val photoId = row.getString("photoId").also(::requireCanonicalUuid)
                 val sourcePath = row.getString("sourceRelativePath").also(::validateRelativeMediaPath)
                 val stagedName = row.getString("stagedFileName")
                 if (stagedName != "$photoId.media") throw IOException("Nom de média temporaire invalide.")
                 val size = row.getLong("sizeBytes")
                 if (size < 0) throw IOException("Taille de média invalide.")
-                DurableMediaArtifact(photoId, sourcePath, stagedName, size, row.getString("sha256").requireHash())
+                DurableMediaArtifact(photoId, sourcePath, stagedName, size, row.getString("sha256").requireHash(), row.optBoolean("imported", false))
             }
             if (mediaArtifacts.map { it.photoId }.distinct().size != mediaArtifacts.size) throw IOException("Identifiant de photo dupliqué dans le journal.")
             val finalized = if (json.has("finalizedMediaPhotoIds")) json.getJSONArray("finalizedMediaPhotoIds").let { a -> (0 until a.length()).map { a.getString(it).also(::requireCanonicalUuid) }.toSet() } else emptySet()
@@ -356,11 +363,13 @@ class DurableBackupOperationJournal(
         target.payloads.toSortedMap().forEach { (path, json) -> payloads.put(path, JSONObject(json)) }
         val photos = JSONArray()
         target.photosToKeep.sortedWith(compareBy({ it.teaId }, { it.position }, { it.id })).forEach { photo ->
-            photos.put(JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("relativePath", photo.relativePath).put("position", photo.position))
+            photos.put(JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("relativePath", photo.relativePath).put("position", photo.position)
+                .put("isPrimary", photo.isPrimary).put("archivePath", photo.archivePath ?: JSONObject.NULL))
         }
         val quarantine = JSONArray()
         target.photosToQuarantine.sortedWith(compareBy({ it.teaId }, { it.position }, { it.id })).forEach { photo ->
-            quarantine.put(JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("relativePath", photo.relativePath).put("position", photo.position))
+            quarantine.put(JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("relativePath", photo.relativePath).put("position", photo.position)
+                .put("isPrimary", photo.isPrimary).put("archivePath", photo.archivePath ?: JSONObject.NULL))
         }
         return JSONObject()
             .put("targetFormat", TARGET_FORMAT)
@@ -371,44 +380,62 @@ class DurableBackupOperationJournal(
             .toString().toByteArray(StandardCharsets.UTF_8)
     }
 
-    private fun stageMedia(operationDir: File, photos: List<TargetPhotoRecord>): List<DurableMediaArtifact> {
-        if (photos.isEmpty()) return emptyList()
+    private fun stageMedia(operationDir: File, photos: List<TargetPhotoRecord>, imports: List<TargetPhotoRecord>, archiveBytes: ByteArray): List<DurableMediaArtifact> {
+        if (photos.isEmpty() && imports.isEmpty()) return emptyList()
         val sourceRoot = mediaRoot?.canonicalFile ?: throw IOException("Le dossier privé des photos est indisponible; préparation interrompue.")
-        if (!sourceRoot.isDirectory) throw IOException("Le dossier privé des photos n’existe pas.")
+        if (!sourceRoot.isDirectory && (photos.isNotEmpty() || !sourceRoot.mkdirs())) throw IOException("Le dossier privé des photos n’existe pas.")
         val mediaDir = safeFile(operationDir, MEDIA_DIRECTORY)
         if (!mediaDir.isDirectory && !mediaDir.mkdirs()) throw IOException("Création du dossier temporaire des médias impossible.")
-        return photos.sortedBy { it.id }.map { photo ->
+        val archive = BackupArchiveValidator.validate(archiveBytes)
+        val all = photos.map { it to false } + imports.map { it to true }
+        if (all.map { it.first.id }.distinct().size != all.size) throw IOException("Une photo ne peut pas être importée et supprimée dans la même restauration.")
+        return all.sortedBy { it.first.id }.map { (photo, imported) ->
             requireCanonicalUuid(photo.id)
             validateRelativeMediaPath(photo.relativePath)
-            val source = File(sourceRoot, photo.relativePath).canonicalFile
-            val rootPrefix = sourceRoot.path.trimEnd(File.separatorChar) + File.separator
-            if (!source.path.startsWith(rootPrefix) || !source.isFile) throw IOException("Fichier photo absent ou hors du dossier privé : ${photo.relativePath}.")
             val fileName = "${photo.id}.media"
             val destination = safeFile(mediaDir, fileName)
             val temporary = File(mediaDir, "$fileName.part")
             val digest = MessageDigest.getInstance("SHA-256")
             var size = 0L
             try {
-                FileInputStream(source).use { input ->
+                val importedBytes = if (imported) {
+                    val path = photo.archivePath ?: throw IOException("Référence à l’image d’archive absente.")
+                    if (path != "photos/${photo.id}.jpg") throw IOException("Référence à l’image d’archive non sûre.")
+                    archive.entries[path] ?: throw IOException("Image absente de l’archive : $path.")
+                } else null
+                if (importedBytes != null) {
                     FileOutputStream(temporary).use { output ->
-                        val buffer = ByteArray(16 * 1024)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            size = Math.addExact(size, count.toLong())
-                            digest.update(buffer, 0, count)
-                            output.write(buffer, 0, count)
-                        }
+                        size = importedBytes.size.toLong()
+                        digest.update(importedBytes)
+                        output.write(importedBytes)
                         output.fd.sync()
                     }
+                } else {
+                    val source = File(sourceRoot, photo.relativePath).canonicalFile
+                    val rootPrefix = sourceRoot.path.trimEnd(File.separatorChar) + File.separator
+                    if (!source.path.startsWith(rootPrefix) || !source.isFile) throw IOException("Fichier photo absent ou hors du dossier privé : ${photo.relativePath}.")
+                    FileInputStream(source).use { input ->
+                        FileOutputStream(temporary).use { output ->
+                            val buffer = ByteArray(16 * 1024)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                size = Math.addExact(size, count.toLong())
+                                digest.update(buffer, 0, count)
+                                output.write(buffer, 0, count)
+                            }
+                            output.fd.sync()
+                        }
+                    }
                 }
+                if (size <= 0 || size > BackupArchiveValidator.MAX_IMAGE_BYTES) throw IOException("Taille de photo hors limites.")
                 Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             } catch (error: Exception) {
                 temporary.delete()
                 if (error is IOException) throw error
                 throw IOException("Copie temporaire du média impossible.", error)
             }
-            DurableMediaArtifact(photo.id, photo.relativePath, fileName, size, digest.digest().toHex())
+            DurableMediaArtifact(photo.id, photo.relativePath, fileName, size, digest.digest().toHex(), imported)
         }
     }
 
@@ -457,8 +484,11 @@ class DurableBackupOperationJournal(
                 val photosArray = root.getJSONArray(key)
                 return (0 until photosArray.length()).map { index ->
                     val photo = photosArray.getJSONObject(index)
-                    if (photo.keys().asSequence().toSet() != setOf("id", "teaId", "relativePath", "position")) throw IOException("Photo de l’état cible invalide.")
-                    TargetPhotoRecord(photo.getString("id"), photo.getString("teaId"), photo.getString("relativePath"), photo.getInt("position"))
+                    val keys = photo.keys().asSequence().toSet()
+                    val oldKeys = setOf("id", "teaId", "relativePath", "position")
+                    if (keys != oldKeys && keys != oldKeys + setOf("isPrimary", "archivePath")) throw IOException("Photo de l’état cible invalide.")
+                    TargetPhotoRecord(photo.getString("id"), photo.getString("teaId"), photo.getString("relativePath"), photo.getInt("position"),
+                        photo.optBoolean("isPrimary", false), if (photo.has("archivePath") && !photo.isNull("archivePath")) photo.getString("archivePath") else null)
                 }
             }
             val photos = readPhotos("photosToKeep")
@@ -508,7 +538,7 @@ class DurableBackupOperationJournal(
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it) }
 
     companion object {
-        const val JOURNAL_VERSION = 2
+        const val JOURNAL_VERSION = 3
         const val TARGET_FORMAT = "thesdupalais.target-state"
         const val MAX_TARGET_BYTES = 200L * 1024 * 1024
         const val MAX_JOURNAL_BYTES = 256L * 1024

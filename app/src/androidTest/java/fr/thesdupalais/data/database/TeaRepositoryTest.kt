@@ -60,6 +60,36 @@ class TeaRepositoryTest {
         assertTrue(database.teaPhotoDao().observeForTea(id).first().isEmpty())
     }
 
+    @Test fun newTeaCannotStartWithAStockBalanceOutsideInventory() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        assertTrue(runCatching { repository.create(NewTea("Stock direct", category.id, stockMilliGrams = 1_000L)) }.isFailure)
+        assertEquals(0, database.teaDao().count())
+        assertEquals(0, database.stockMovementDao().count())
+    }
+
+    @Test fun legacyRepairPreservesBalancesAndExistingRowsAndIsIdempotent() = runBlocking {
+        val category = standard(ReferenceKind.CATEGORY, "GREEN")
+        val teaId = UUID.randomUUID()
+        database.teaDao().insert(
+            TeaEntity(teaId, null, "Historique ancien", category.id, null, null, null, null, null, null,
+                null, null, null, 13_250L, null),
+        )
+        val before = requireNotNull(database.teaDao().findById(teaId))!!.stockMilliGrams
+
+        val first = repository.repairLegacyStockHistory()
+        val rows = database.stockMovementDao().findForTea(teaId)
+        val second = repository.repairLegacyStockHistory()
+
+        assertEquals(1, first.insertedMovementCount)
+        assertTrue(first.findings.isEmpty())
+        assertEquals(1, rows.size)
+        assertEquals("INVENTORY", rows.single().kind)
+        assertEquals(13_250L, rows.single().stockAfterMilliGrams)
+        assertEquals(before, database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals(0, second.insertedMovementCount)
+        assertEquals(1, database.stockMovementDao().findForTea(teaId).size)
+    }
+
     @Test fun createsAllSelectedAssociationsAndAddsRegionParentCountries() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "OOLONG")
         val status = standard(ReferenceKind.STATUS)
@@ -114,42 +144,35 @@ class TeaRepositoryTest {
         assertEquals(0, database.stockMovementDao().count())
     }
 
-    @Test fun createsAndUpdatesKnownStockWithoutWritingStockHistory() = runBlocking {
+    @Test fun knownStockIsInitializedAndChangedThroughInventoryHistory() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
-        val teaId = repository.create(NewTea("Thé avec stock", category.id, stockMilliGrams = 12_500L))
+        val teaId = repository.create(NewTea("Thé avec stock", category.id))
+        repository.applyInventoryChanges(listOf(InventoryTeaChange(teaId, null, false, 12_500L, true)))
         assertEquals(12_500L, database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals("INVENTORY", database.stockMovementDao().findForTea(teaId).single().kind)
 
-        repository.update(
-            teaId,
-            NewTea("Thé avec stock", category.id, stockMilliGrams = 0L),
-            setOf(TeaEditableField.STOCK),
-        )
+        repository.applyInventoryChanges(listOf(InventoryTeaChange(teaId, null, false, 0L, true)))
         assertEquals(0L, database.teaDao().findById(teaId)?.stockMilliGrams)
-
-        repository.update(
-            teaId,
-            NewTea("Thé avec stock", category.id, stockMilliGrams = null),
-            setOf(TeaEditableField.STOCK),
-        )
-        assertNull(database.teaDao().findById(teaId)?.stockMilliGrams)
-        assertEquals(0, database.stockMovementDao().count())
+        assertEquals(listOf("INVENTORY", "CORRECTION"), database.stockMovementDao().findForTea(teaId).map { it.kind })
     }
 
-    @Test fun recordsOneTastingAndClampsKnownStockAtZeroWithoutStockMovements() = runBlocking {
+    @Test fun recordsConsumptionMovementsAndRejectsConsumptionBeyondKnownStock() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
-        val teaId = repository.create(NewTea("Stock faible", category.id, stockMilliGrams = 2_000L))
+        val teaId = createTeaWithInventory("Stock faible", category.id, 7_000L)
 
         val firstTastingId = repository.recordConsumedTasting(teaId, 5_000L)
-        assertEquals(0L, database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals(2_000L, database.teaDao().findById(teaId)?.stockMilliGrams)
         val tastings = database.tastingDao().observeForTea(teaId).first()
         assertEquals(1, tastings.size)
         assertEquals(firstTastingId, tastings.single().id)
         assertEquals(5_000L, tastings.single().consumedMilliGrams)
 
         repository.recordConsumedTasting(teaId, 1_000L)
-        assertEquals(0L, database.teaDao().findById(teaId)?.stockMilliGrams)
+        assertEquals(1_000L, database.teaDao().findById(teaId)?.stockMilliGrams)
         assertEquals(2, database.tastingDao().observeForTea(teaId).first().size)
-        assertEquals(0, database.stockMovementDao().count())
+        assertEquals(3, database.stockMovementDao().count())
+        assertTrue(runCatching { repository.recordConsumedTasting(teaId, 1_500L) }.isFailure)
+        assertEquals(1_000L, database.teaDao().findById(teaId)?.stockMilliGrams)
     }
 
     @Test fun recordsTastingWithoutChangingUnknownStock() = runBlocking {
@@ -165,7 +188,7 @@ class TeaRepositoryTest {
 
     @Test fun recordTastingRespectsBlockedWriteCoordinator() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
-        val teaId = repository.create(NewTea("Verrouillé", category.id, stockMilliGrams = 10_000L))
+        val teaId = createTeaWithInventory("Verrouillé", category.id, 10_000L)
         val blockedRepository = TeaRepository(
             database,
             BackupOperationWriteCoordinator {
@@ -182,7 +205,7 @@ class TeaRepositoryTest {
 
     @Test fun recordsHistoricalTastingAndDeletesItRestoringKnownStock() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
-        val teaId = repository.create(NewTea("Dégustation oubliée", category.id, stockMilliGrams = 20_000L))
+        val teaId = createTeaWithInventory("Dégustation oubliée", category.id, 20_000L)
         val occurredAt = 1_700_000_000_000L
         val tastingId = repository.recordTasting(teaId, occurredAt, 7_500L)
 
@@ -194,7 +217,9 @@ class TeaRepositoryTest {
         assertTrue(repository.deleteTasting(teaId, tastingId))
         assertNull(database.tastingDao().findForTea(tastingId, teaId))
         assertEquals(20_000L, database.teaDao().findById(teaId)?.stockMilliGrams)
-        assertEquals(0, database.stockMovementDao().count())
+        val movements = database.stockMovementDao().findForTea(teaId)
+        assertEquals(listOf("INVENTORY", "CONSUMPTION", "CORRECTION"), movements.map { it.kind })
+        assertNull(movements[1].tastingId)
     }
 
     @Test fun deletingTastingPreservesUnknownStockAndMissingTastingReturnsFalse() = runBlocking {
@@ -210,7 +235,7 @@ class TeaRepositoryTest {
 
     @Test fun deletingTastingRespectsBlockedWriteCoordinator() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
-        val teaId = repository.create(NewTea("Verrouillé", category.id, stockMilliGrams = 10_000L))
+        val teaId = createTeaWithInventory("Verrouillé", category.id, 10_000L)
         val tastingId = repository.recordTasting(teaId, 1_700_000_000_000L, 3_000L)
         val blockedRepository = TeaRepository(
             database,
@@ -228,7 +253,7 @@ class TeaRepositoryTest {
 
     @Test fun archivingTeaPreservesItsRecordAssociationsAndTastingHistory() = runBlocking {
         val category = standard(ReferenceKind.CATEGORY, "GREEN")
-        val teaId = repository.create(NewTea("Thé archivé", category.id, stockMilliGrams = 8_000L))
+        val teaId = createTeaWithInventory("Thé archivé", category.id, 8_000L)
         val tastingId = repository.recordTasting(teaId, 1_700_000_000_000L, 2_000L)
 
         assertTrue(repository.archiveTea(teaId))
@@ -479,6 +504,12 @@ class TeaRepositoryTest {
     private suspend fun standard(kind: ReferenceKind, semanticKey: String? = null): ReferenceEntity =
         if (semanticKey != null) requireNotNull(database.referenceDao().findBySemanticKey(kind.name, semanticKey))
         else requireNotNull(database.referenceDao().observeByKind(kind.name).first().firstOrNull())
+
+    private suspend fun createTeaWithInventory(name: String, categoryId: UUID, stockMilliGrams: Long): UUID {
+        val teaId = repository.create(NewTea(name, categoryId))
+        repository.applyInventoryChanges(listOf(InventoryTeaChange(teaId, null, false, stockMilliGrams, true)))
+        return teaId
+    }
 
     private suspend fun reference(
         kind: ReferenceKind,

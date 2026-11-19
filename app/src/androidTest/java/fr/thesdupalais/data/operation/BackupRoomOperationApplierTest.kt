@@ -70,7 +70,7 @@ class BackupRoomOperationApplierTest {
         }
         val storeFile = File(tempRoot, "settings.preferences_pb")
         preferences = LocalPreferencesRepository(PreferenceDataStoreFactory.create(scope = scope, produceFile = { storeFile }), coordinator)
-        exporter = BackupArchiveExporter(database, preferences, context.contentResolver)
+        exporter = BackupArchiveExporter(database, preferences, context.contentResolver, filesDir = File(tempRoot, "media"))
         applier = BackupRoomOperationApplier(database, exporter, preferences, journal, coordinator, faultInjector = RoomApplyFaultInjector { point ->
             if (fault == point) error("Panne simulée à $point")
         })
@@ -88,10 +88,10 @@ class BackupRoomOperationApplierTest {
     @Test fun selectedTeaReplacementDeletesHistoryAtomicallyAndKeepsOriginalPhotoFile() = runBlocking {
         val category = reference(CATEGORY, "CATEGORY", "Catégorie")
         val tea = tea(OLD_TEA, 101, "Ancien thé", CATEGORY, 1000)
-        val photoFile = File(tempRoot, "media/photos/old.jpg").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val photoFile = mediaFile("old.jpg")
         database.referenceDao().insert(category)
         database.teaDao().insert(tea)
-        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/old.jpg", 0))
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/old.jpg", 0, true))
         database.tastingDao().insert(TastingEntity(TASTING, OLD_TEA, 1000, 1001, 100))
         database.stockMovementDao().insert(StockMovementEntity(MOVEMENT, OLD_TEA, "INVENTORY", null, 1000, 1000, 1001, null, null))
         database.importedDatasetDao().insert(ImportedDatasetEntity(DATASET, 1, "a".repeat(64), 1, 2, 1, 1, 1, 1, 7000, 25000))
@@ -115,7 +115,8 @@ class BackupRoomOperationApplierTest {
         database.referenceDao().insert(category)
         database.referenceDao().insert(status)
         database.teaDao().insert(tea(OLD_TEA, 101, "Thé local", CATEGORY))
-        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/keep.jpg", 0))
+        mediaFile("keep.jpg")
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/keep.jpg", 0, true))
         val originalPrefs = preferences.preferences.first()
         val incoming = archive(BackupArchiveExporter.Snapshot(
             references = listOf(reference(STATUS, "STATUS", "À déguster")), teas = emptyList(),
@@ -127,6 +128,29 @@ class BackupRoomOperationApplierTest {
         assertEquals(1, database.teaPhotoDao().allForBackup().size)
         assertEquals(originalPrefs, preferences.preferences.first())
         assertEquals("À déguster", database.referenceDao().findById(STATUS)!!.label)
+    }
+
+    @Test fun v2ReplacementRestoresPhotoRowsOrderPrimaryAndPrivateFiles() = runBlocking {
+        database.referenceDao().insert(reference(CATEGORY, "CATEGORY", "Catégorie"))
+        val incomingTea = tea(NEW_TEA, 202, "Thé avec photos", CATEGORY)
+        val incomingPhotos = listOf(
+            TeaPhotoEntity(PHOTO, NEW_TEA, "tea-photos/$PHOTO.jpg", 0, false),
+            TeaPhotoEntity(PHOTO_KEPT, NEW_TEA, "tea-photos/$PHOTO_KEPT.jpg", 1, true),
+        )
+        val incoming = archive(BackupArchiveExporter.Snapshot(
+            references = listOf(reference(CATEGORY, "CATEGORY", "Catégorie")),
+            teas = listOf(incomingTea), countries = emptyList(), regions = emptyList(), aromas = emptyList(), profiles = emptyList(),
+            moments = emptyList(), badges = emptyList(), tastings = emptyList(), movements = emptyList(), photos = incomingPhotos,
+            photoBytes = incomingPhotos.associate { it.relativePath to TEST_JPEG },
+        ), setOf(BackupExportSet.TEAS))
+        val prepared = prepare(incoming, TargetOperation.REPLACE, setOf("teas"), replacementConfirmed = true)
+        applier.apply(prepared.first, prepared.second)
+        finalizer.finalize(prepared.first)
+        val restored = database.teaPhotoDao().observeForTea(NEW_TEA).first()
+        assertEquals(listOf(PHOTO, PHOTO_KEPT), restored.map { it.id })
+        assertEquals(listOf(false, true), restored.map { it.isPrimary })
+        assertTrue(File(tempRoot, "media/tea-photos/$PHOTO.jpg").isFile)
+        assertTrue(File(tempRoot, "media/tea-photos/$PHOTO_KEPT.jpg").isFile)
     }
 
     @Test fun replacementOfBothSetsChangesTeasAndConfigurationTogether() = runBlocking {
@@ -277,11 +301,11 @@ class BackupRoomOperationApplierTest {
         database.referenceDao().insert(category)
         database.teaDao().insert(tea(OLD_TEA, 101, "Ancien", CATEGORY))
         database.teaDao().insert(tea(NEW_TEA, 202, "Conservé", CATEGORY))
-        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/remove.jpg", 0))
-        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO_OLD_SHARED, OLD_TEA, "photos/shared.jpg", 1))
-        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO_KEPT, NEW_TEA, "photos/shared.jpg", 0))
-        val removed = File(tempRoot, "media/photos/remove.jpg").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3, 4)) }
-        val shared = File(tempRoot, "media/photos/shared.jpg").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(8, 9, 10, 11)) }
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO, OLD_TEA, "photos/remove.jpg", 0, true))
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO_OLD_SHARED, OLD_TEA, "photos/shared.jpg", 1, false))
+        database.teaPhotoDao().insert(TeaPhotoEntity(PHOTO_KEPT, NEW_TEA, "photos/shared.jpg", 0, true))
+        val removed = mediaFile("remove.jpg")
+        val shared = mediaFile("shared.jpg")
         val incoming = archive(BackupArchiveExporter.Snapshot(
             references = listOf(category), teas = listOf(tea(NEW_TEA, 202, "Conservé", CATEGORY)), countries = emptyList(), regions = emptyList(), aromas = emptyList(), profiles = emptyList(), moments = emptyList(), badges = emptyList(), tastings = emptyList(), movements = emptyList(),
         ), setOf(BackupExportSet.TEAS))
@@ -324,6 +348,11 @@ class BackupRoomOperationApplierTest {
     private fun archive(snapshot: BackupArchiveExporter.Snapshot, selected: Set<BackupExportSet>, prefs: UserPreferences = UserPreferences()) =
         BackupArchiveExporter.BackupArchiveWriter.write(snapshot, selected, prefs, "instrumented-test", UUID.randomUUID(), Instant.parse("2026-01-01T00:00:00Z"))
 
+    private fun mediaFile(name: String) = File(tempRoot, "media/photos/$name").apply {
+        parentFile!!.mkdirs()
+        writeBytes(TEST_JPEG)
+    }
+
     private fun emptySnapshot() = BackupArchiveExporter.Snapshot(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
 
     private fun reference(id: UUID, kind: String, label: String) = ReferenceEntity(id, kind, label, ReferenceLabelNormalizer.normalize(label), null, null, "", null, 0)
@@ -345,5 +374,6 @@ class BackupRoomOperationApplierTest {
         val MOVEMENT = UUID.fromString("123e4567-e89b-12d3-a456-426614174131")
         val NEW_TASTING = UUID.fromString("123e4567-e89b-12d3-a456-426614174132")
         val DATASET = UUID.fromString("123e4567-e89b-12d3-a456-426614174140")
+        val TEST_JPEG = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xc0.toByte(), 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xff.toByte(), 0xd9.toByte())
     }
 }

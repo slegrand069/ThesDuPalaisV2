@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 
 class BackupReplacementSession internal constructor(
     val backupId: String,
+    val schemaVersion: Int,
     val createdAt: String,
     val includedSets: Set<String>,
     archiveBytes: ByteArray,
@@ -77,7 +78,7 @@ class BackupReplacementWorkflow(
         val validated = BackupArchiveValidator.validate(archiveBytes)
         val local = exporter.captureCurrentOperationSnapshot()
         BackupArchiveValidator.validate(local.archiveBytes)
-        return BackupReplacementSession(validated.backupId, validated.createdAt, validated.includedSets, archiveBytes, local)
+        return BackupReplacementSession(validated.backupId, validated.schemaVersion, validated.createdAt, validated.includedSets, archiveBytes, local)
     }
 
     suspend fun preview(session: BackupReplacementSession, selectedSets: Set<String>): BackupReplacementSelection =

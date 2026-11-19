@@ -37,6 +37,7 @@ data class TeaDetail(
     val moments: List<String>,
     val badges: List<String>,
     val stockMilliGrams: Long? = null,
+    val photos: List<fr.thesdupalais.data.database.TeaPhotoEntity> = emptyList(),
 )
 
 data class TeaTasting(val id: UUID, val occurredAtEpochMillis: Long, val consumedMilliGrams: Long?)
@@ -120,6 +121,7 @@ internal fun TeaWithDetailData.toTeaDetail(): TeaDetail = TeaDetail(
     moments = moments.displayLabels(),
     badges = badges.displayLabels(),
     stockMilliGrams = tea.stockMilliGrams,
+    photos = photos.sortedBy { it.position },
 )
 
 internal fun TastingEntity.toTeaTasting() = TeaTasting(id, occurredAtEpochMillis, consumedMilliGrams)

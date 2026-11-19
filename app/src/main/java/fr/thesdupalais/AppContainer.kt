@@ -11,6 +11,7 @@ import fr.thesdupalais.data.database.MIGRATION_5_6
 import fr.thesdupalais.data.database.MIGRATION_6_7
 import fr.thesdupalais.data.database.MIGRATION_7_8
 import fr.thesdupalais.data.database.MIGRATION_8_9
+import fr.thesdupalais.data.database.MIGRATION_9_10
 import fr.thesdupalais.data.importer.CollectionImporter
 import fr.thesdupalais.data.backup.BackupArchiveExporter
 import fr.thesdupalais.data.backup.BackupArchivePreviewReader
@@ -43,6 +44,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class AppContainer(context: Context) : FirstRunOperations {
+    private val stockRepairPreferences = context.applicationContext.getSharedPreferences("stock-history-repair", Context.MODE_PRIVATE)
     private val recoveryMutex = Mutex()
     private val recoveryStateMutable = MutableStateFlow<RecoveryInspection?>(null)
     val recoveryInspection: StateFlow<RecoveryInspection?> = recoveryStateMutable.asStateFlow()
@@ -50,7 +52,7 @@ class AppContainer(context: Context) : FirstRunOperations {
         context.applicationContext,
         AppDatabase::class.java,
         "thes-du-palais.db",
-    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9).build()
+    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10).build()
 
     val operationJournal = DurableBackupOperationJournal(
         root = File(context.noBackupFilesDir, "backup-operations"),
@@ -60,11 +62,12 @@ class AppContainer(context: Context) : FirstRunOperations {
     val preferences = LocalPreferencesRepository(context, operationWriteCoordinator)
     val referenceRepository = RoomReferenceRepository(database, operationWriteCoordinator)
     val semanticDictionaryRepository = SemanticDictionaryRepository(database, operationWriteCoordinator)
-    val teaRepository = TeaRepository(database, operationWriteCoordinator)
+    val teaPhotoStore = fr.thesdupalais.data.database.TeaPhotoStore(context.contentResolver, context.filesDir)
+    val teaRepository = TeaRepository(database, operationWriteCoordinator, teaPhotoStore)
     val articleRepository = ArticleRepository(database, operationWriteCoordinator)
     val articleJsonImporter = ArticleJsonImporter(articleRepository)
     val collectionImporter = CollectionImporter(database, preferences, writeCoordinator = operationWriteCoordinator)
-    val backupArchiveExporter = BackupArchiveExporter(database, preferences, context.applicationContext.contentResolver)
+    val backupArchiveExporter = BackupArchiveExporter(database, preferences, context.applicationContext.contentResolver, filesDir = context.filesDir)
     val backupRoomOperationApplier = BackupRoomOperationApplier(
         database = database,
         exporter = backupArchiveExporter,
@@ -103,6 +106,17 @@ class AppContainer(context: Context) : FirstRunOperations {
         if (recovery.blocksWrites) throw IllegalStateException(
             recovery.detail ?: "Une opération inachevée doit être récupérée avant l’initialisation.",
         )
+        if (!stockRepairPreferences.getBoolean("legacy_repair_v1_complete", false)) {
+            val repair = teaRepository.repairLegacyStockHistory()
+            android.util.Log.i("StockHistoryRepair", "Régularisation terminée : ${repair.insertedMovementCount} mouvement(s) de référence/correction ajouté(s).")
+            if (repair.findings.isNotEmpty()) android.util.Log.w(
+                "StockHistoryRepair",
+                "${repair.findings.size} historique(s) laissé(s) intact(s) car non réparable(s) sans hypothèse: ${repair.findings.joinToString("; ")}",
+            )
+            check(stockRepairPreferences.edit().putBoolean("legacy_repair_v1_complete", true).commit()) {
+                "Le statut de réparation du stock n’a pas pu être enregistré."
+            }
+        }
         StandardReferenceSeeder(database, operationWriteCoordinator).seed()
         SemanticDictionarySeeder(database, operationWriteCoordinator).seed()
     }

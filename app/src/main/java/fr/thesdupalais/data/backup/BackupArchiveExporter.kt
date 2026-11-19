@@ -14,10 +14,13 @@ import fr.thesdupalais.data.database.TeaCountryEntity
 import fr.thesdupalais.data.database.TeaEntity
 import fr.thesdupalais.data.database.TeaMomentEntity
 import fr.thesdupalais.data.database.TeaRegionEntity
+import fr.thesdupalais.data.database.TeaPhotoEntity
 import fr.thesdupalais.data.preferences.LocalPreferencesRepository
 import fr.thesdupalais.data.preferences.UserPreferences
 import java.io.IOException
 import java.io.OutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.time.Instant
 import java.util.UUID
 import java.util.zip.ZipEntry
@@ -45,6 +48,7 @@ class BackupArchiveExporter(
     private val contentResolver: ContentResolver,
     private val applicationVersion: String = "1.0",
     private val now: () -> Instant = Instant::now,
+    private val filesDir: File? = null,
 ) {
     suspend fun exportTo(uri: Uri, selectedSets: Set<BackupExportSet>) {
         if (selectedSets.isEmpty()) throw IllegalArgumentException("Sélectionnez au moins un ensemble à exporter.")
@@ -88,7 +92,7 @@ class BackupArchiveExporter(
         val snapshot = readSnapshot(selected)
         val archive = BackupArchiveWriter.write(snapshot, selected, preferenceSnapshot, applicationVersion, UUID.randomUUID(), now())
         val photos = database.teaPhotoDao().allForBackup().map {
-            TargetPhotoRecord(it.id.toString(), it.teaId.toString(), it.relativePath, it.position)
+            TargetPhotoRecord(it.id.toString(), it.teaId.toString(), it.relativePath, it.position, it.isPrimary)
         }
         val importHistory = database.importedDatasetDao().allForBackup().map {
             TargetImportRecord(it.datasetId.toString(), it.contentSha256, it.schemaVersion, it.isSuperseded)
@@ -111,6 +115,17 @@ class BackupArchiveExporter(
             }
             allReferences.filter { it.id in ids }
         }
+        val selectedTeaIds = teas.map { it.id }.toSet()
+        val photoRows = if (BackupExportSet.TEAS in selectedSets) database.teaPhotoDao().allForBackup().filter { it.teaId in selectedTeaIds } else emptyList()
+        val photoBytes = photoRows.associate { row ->
+            val root = filesDir?.canonicalFile ?: throw IOException("Le stockage privé des photos n’est pas configuré.")
+            if (!row.relativePath.startsWith("tea-photos/") || row.relativePath.contains("..") || '\\' in row.relativePath) throw IOException("Référence photo locale invalide.")
+            val file = File(root, row.relativePath).canonicalFile
+            if (!file.path.startsWith(root.path.trimEnd(File.separatorChar) + File.separator) || !file.isFile || file.length() > BackupArchiveValidator.MAX_IMAGE_BYTES) {
+                throw IOException("Fichier photo absent, hors du stockage privé ou trop volumineux : ${row.relativePath}.")
+            }
+            row.relativePath to FileInputStream(file).use { it.readBytes() }
+        }
         return Snapshot(
             references = references,
             teas = teas,
@@ -122,6 +137,8 @@ class BackupArchiveExporter(
             badges = if (BackupExportSet.TEAS in selectedSets) database.teaDao().allBadgesForBackup() else emptyList(),
             tastings = if (BackupExportSet.TEAS in selectedSets) database.tastingDao().allForBackup() else emptyList(),
             movements = if (BackupExportSet.TEAS in selectedSets) database.stockMovementDao().allForBackup() else emptyList(),
+            photos = photoRows,
+            photoBytes = photoBytes,
         )
     }
 
@@ -131,12 +148,18 @@ class BackupArchiveExporter(
         val aromas: List<TeaAromaEntity>, val profiles: List<TeaAromaticProfileEntity>,
         val moments: List<TeaMomentEntity>, val badges: List<TeaBadgeEntity>,
         val tastings: List<TastingEntity>, val movements: List<StockMovementEntity>,
+        val photos: List<TeaPhotoEntity> = emptyList(),
+        val photoBytes: Map<String, ByteArray> = emptyMap(),
     )
 
     internal object BackupArchiveWriter {
         fun write(snapshot: Snapshot, sets: Set<BackupExportSet>, prefs: UserPreferences, version: String, backupId: UUID, createdAt: Instant): ByteArray {
             val payloads = linkedMapOf<String, Pair<String, ByteArray>>()
             if (BackupExportSet.TEAS in sets) payloads["data/teas.json"] = "application/json" to teasJson(snapshot).toByteArray(Charsets.UTF_8)
+            if (BackupExportSet.TEAS in sets) snapshot.photos.forEach { photo ->
+                val source = snapshot.photoBytes[photo.relativePath] ?: throw IllegalStateException("Fichier photo manquant pour ${photo.id}.")
+                payloads["photos/${photo.id}.jpg"] = "image/jpeg" to source
+            }
             if (BackupExportSet.CONFIGURATION in sets) payloads["data/configuration.json"] = "application/json" to configurationJson(snapshot.references, prefs).toByteArray(Charsets.UTF_8)
             if (BackupExportSet.ARTICLES in sets) payloads["articles/index.json"] = "application/json" to "{\"articles\":[]}".toByteArray()
             val entries = JSONArray()
@@ -225,7 +248,12 @@ class BackupArchiveExporter(
             s.references.filter { it.id in required }.sortedWith(compareBy<ReferenceEntity> { it.kind }.thenBy { it.id.toString() }).forEach { ref ->
                 refs.put(referenceJson(ref))
             }
-            return JSONObject().put("references", refs).put("teas", teas).put("tastings", tastings).put("stockMovements", movements).toString()
+            val photos = JSONArray()
+            s.photos.sortedWith(compareBy<TeaPhotoEntity> { it.teaId }.thenBy { it.position }.thenBy { it.id }).forEach { photo ->
+                photos.put(JSONObject().put("id", photo.id.toString()).put("teaId", photo.teaId.toString())
+                    .put("path", "photos/${photo.id}.jpg").put("position", photo.position).put("isPrimary", photo.isPrimary))
+            }
+            return JSONObject().put("references", refs).put("teas", teas).put("tastings", tastings).put("stockMovements", movements).put("photos", photos).toString()
         }
 
         private fun configurationJson(refs: List<ReferenceEntity>, p: UserPreferences): String {

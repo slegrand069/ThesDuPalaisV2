@@ -218,6 +218,7 @@ data class TeaPhotoEntity(
     /** App-private relative file path; no imported photos are created in this step. */
     val relativePath: String,
     val position: Int,
+    val isPrimary: Boolean = false,
 )
 
 @Entity(tableName = "imported_datasets")

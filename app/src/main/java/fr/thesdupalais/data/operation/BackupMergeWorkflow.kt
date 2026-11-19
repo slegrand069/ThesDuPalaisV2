@@ -31,6 +31,7 @@ data class BackupMergeLabels(
 
 class BackupMergeSession internal constructor(
     val backupId: String,
+    val schemaVersion: Int,
     val createdAt: String,
     val includedSets: Set<String>,
     val unsupportedSets: Set<String>,
@@ -104,6 +105,7 @@ class BackupMergeWorkflow(
         val supported = archive.includedSets.intersect(setOf("teas", "configuration"))
         return BackupMergeSession(
             backupId = archive.backupId,
+            schemaVersion = archive.schemaVersion,
             createdAt = archive.createdAt,
             includedSets = archive.includedSets,
             unsupportedSets = archive.includedSets - supported,

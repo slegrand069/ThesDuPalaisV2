@@ -16,6 +16,7 @@ data class PreviewGroup(
 )
 data class BackupArchivePreview(
     val backupId: String,
+    val schemaVersion: Int,
     val createdAt: String,
     val archiveSha256: String,
     val archiveSets: Set<String>,
@@ -58,6 +59,11 @@ object BackupArchivePreviewAnalyzer {
                 removeMissing = false,
                 preserveIds = emptySet(),
             )
+            if (archive.schemaVersion >= BackupArchiveValidator.SCHEMA_VERSION) {
+                val incomingPhotos = incomingTeas.arrayOrEmpty("photos")
+                val currentPhotos = currentTeas.arrayOrEmpty("photos")
+                groups += compareRows("Photos des thés", incomingPhotos, currentPhotos)
+            }
         }
         if ("configuration" in selectedSets) {
             val incoming = archive.json("data/configuration.json")!!
@@ -80,9 +86,12 @@ object BackupArchivePreviewAnalyzer {
             groups += group("Articles (comparaison locale indisponible)", mapOf(PreviewDisposition.NOT_COMPARABLE to incoming.size))
             limits += "Les articles sont listés dans l’archive, mais cette version de l’application ne possède pas encore de modèle local pour les comparer."
         }
-        limits += "Le contrat de sauvegarde v1 ne transporte pas les photos des thés; cette archive ne constitue pas une sauvegarde intégrale de l’application."
+        if (archive.schemaVersion == BackupArchiveValidator.LEGACY_SCHEMA_VERSION) {
+            limits += "Le ZIP v1 ne transporte pas les photos des thés; les photos locales liées aux fiches conservées resteront inchangées."
+        }
         return BackupArchivePreview(
             backupId = archive.backupId,
+            schemaVersion = archive.schemaVersion,
             createdAt = archive.createdAt,
             archiveSha256 = sha256(archiveBytes),
             archiveSets = archive.includedSets,
@@ -261,6 +270,7 @@ object BackupArchivePreviewAnalyzer {
         archive.json("data/teas.json")?.let { root ->
             put("Thés", root.array("teas").size); put("Dégustations", root.array("tastings").size)
             put("Mouvements de stock", root.array("stockMovements").size); put("Références dépendantes", root.array("references").size)
+            root.optJSONArray("photos")?.let { put("Photos des thés", it.length()) }
         }
         archive.json("data/configuration.json")?.let { root ->
             put("Références de configuration", root.array("references").size)

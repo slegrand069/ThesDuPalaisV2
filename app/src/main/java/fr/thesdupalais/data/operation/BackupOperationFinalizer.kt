@@ -123,6 +123,14 @@ class BackupOperationFinalizer(
             val actual = currentEntries[path] ?: throw IOException("Ensemble Room absent après application : $path.")
             val expected = JSONObject(json).let { payload ->
                 if (path == "data/teas.json") {
+                    if (!payload.has("photos")) {
+                        payload.put("photos", org.json.JSONArray(target.photosToKeep.groupBy { it.teaId }.toSortedMap().flatMap { (_, photos) ->
+                            photos.sortedBy { it.position }.mapIndexed { index, photo ->
+                                JSONObject().put("id", photo.id).put("teaId", photo.teaId).put("path", "photos/${photo.id}.jpg")
+                                    .put("position", photo.position).put("isPrimary", index == 0)
+                            }
+                        }))
+                    }
                     // Older prepared merge targets could carry the entire configuration catalog
                     // in teas.json. Keep the persisted target and its fingerprint untouched, but
                     // compare its exact tea dependency closure against Room for forward recovery.
@@ -135,7 +143,7 @@ class BackupOperationFinalizer(
                 throw IOException("Les données Room ne correspondent pas à l’état cible : $path.")
             }
         }
-        val expectedPhotos = target.photosToKeep.sortedWith(photoOrder)
+        val expectedPhotos = target.photosToKeep.map { it.copy(archivePath = null) }.sortedWith(photoOrder)
         val actualPhotos = current.photos.sortedWith(photoOrder)
         require(actualPhotos == expectedPhotos) { "Les relations photo Room ne correspondent pas à l’état cible." }
         target.photosToKeep.forEach { photo ->
@@ -150,6 +158,19 @@ class BackupOperationFinalizer(
     private fun finalizeMedia(entry: DurableOperationEntry, target: BackupTargetState, photoId: String) {
         val artifact = entry.mediaArtifacts.singleOrNull { it.photoId == photoId } ?: throw IOException("Métadonnée de photo absente.")
         val staged = journal.stagedMediaFile(entry, photoId)
+        if (artifact.imported) {
+            val destination = journal.privateMediaFile(artifact.sourceRelativePath)
+            if (!destination.isFile || destination.length() != artifact.sizeBytes || sha256(destination) != artifact.sha256) {
+                val parent = destination.parentFile ?: throw IOException("Dossier de destination photo absent.")
+                if (!parent.isDirectory && !parent.mkdirs()) throw IOException("Création du dossier photo impossible.")
+                val part = File(parent, destination.name + ".restore-part")
+                copyAndSync(staged, part)
+                Files.move(part.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            }
+            verifyFile(destination, artifact.sizeBytes, artifact.sha256)
+            verifyMediaResult(entry, target, photoId)
+            return
+        }
         val destination = journal.quarantineFile(entry.operationId, photoId)
         if (!destination.isFile) {
             val parent = destination.parentFile ?: throw IOException("Dossier de quarantaine absent.")
@@ -171,6 +192,10 @@ class BackupOperationFinalizer(
 
     private fun verifyMediaResult(entry: DurableOperationEntry, target: BackupTargetState, photoId: String) {
         val artifact = entry.mediaArtifacts.singleOrNull { it.photoId == photoId } ?: throw IOException("Métadonnée de photo absente.")
+        if (artifact.imported) {
+            verifyFile(journal.privateMediaFile(artifact.sourceRelativePath), artifact.sizeBytes, artifact.sha256)
+            return
+        }
         verifyFile(journal.quarantineFile(entry.operationId, photoId), artifact.sizeBytes, artifact.sha256)
         val source = journal.privateMediaFile(artifact.sourceRelativePath)
         if (target.photosToKeep.none { it.relativePath == artifact.sourceRelativePath }) require(!source.exists()) {

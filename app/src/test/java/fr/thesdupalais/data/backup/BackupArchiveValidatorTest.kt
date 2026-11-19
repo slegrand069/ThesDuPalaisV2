@@ -59,6 +59,25 @@ class BackupArchiveValidatorTest {
         assertEquals(setOf("teas", "configuration"), BackupArchiveValidator.validate(archive).includedSets)
     }
 
+    @Test fun unknownStockIsValidButKnownStockRequiresAReferenceMovement() {
+        val refs = listOf(reference(CAT, "CATEGORY", label = "Vert"))
+        BackupArchiveValidator.validate(zip(mapOf("data/teas.json" to teaPayload(refs, listOf(tea(TEA_A, CAT)))), setOf("teas")))
+        assertThrows(BackupArchiveValidator.ValidationException::class.java) {
+            BackupArchiveValidator.validate(zip(mapOf("data/teas.json" to teaPayload(refs, listOf(tea(TEA_A, CAT, stock = "0")))), setOf("teas")))
+        }
+    }
+
+    @Test fun zeroAndPositiveKnownStocksExportWithAnInventoryBaseline() {
+        val refs = listOf(reference(CAT, "CATEGORY", label = "Vert"))
+        listOf("0", "12500").forEachIndexed { index, stock ->
+            val teaId = if (index == 0) TEA_A else TEA_B
+            val movementId = if (index == 0) MOVEMENT else "123e4567-e89b-12d3-a456-426614174009"
+            val movement = """{"id":"$movementId","teaId":"$teaId","kind":"INVENTORY","deltaMilliGrams":null,"stockAfterMilliGrams":$stock,"occurredAt":"2026-01-01T00:00:00Z","recordedAt":"2026-01-01T00:00:00Z","tastingId":null,"note":"Inventaire"}"""
+            val archive = zip(mapOf("data/teas.json" to teaPayload(refs, listOf(tea(teaId, CAT, stock = stock)), movements = listOf(movement))), setOf("teas"))
+            BackupArchiveValidator.validate(archive)
+        }
+    }
+
     @Test fun rejectsOrphanedTeaReference() {
         val archive = zip(mapOf("data/teas.json" to teaPayload(emptyList(), listOf(tea(id = TEA_A, category = CAT)))), setOf("teas"))
         assertThrows(BackupArchiveValidator.ValidationException::class.java) { BackupArchiveValidator.validate(archive) }
@@ -130,8 +149,8 @@ class BackupArchiveValidatorTest {
     private fun reference(id: String, kind: String, label: String = kind, parent: String? = null): String =
         """{"id":"$id","kind":"$kind","semanticKey":null,"label":"$label","parentCountryId":${parent?.let { "\"$it\"" } ?: "null"},"archivedAt":null,"displayPriority":0}"""
 
-    private fun tea(id: String, category: String, legacy: Int? = null): String =
-        """{"id":"$id","legacyId":${legacy ?: "null"},"name":"Tea $id","categoryId":"$category","description":null,"technicalInformation":null,"personalNotes":null,"olfactoryRating":null,"tasteRating":null,"brewTemperatureCelsius":null,"infusionDurationSeconds":null,"statusId":null,"containerId":null,"countryIds":[],"regionIds":[],"aromaIds":[],"aromaticProfileIds":[],"momentIds":[],"badgeIds":[],"stockMilliGrams":null,"archivedAt":null}"""
+    private fun tea(id: String, category: String, legacy: Int? = null, stock: String? = null): String =
+        """{"id":"$id","legacyId":${legacy ?: "null"},"name":"Tea $id","categoryId":"$category","description":null,"technicalInformation":null,"personalNotes":null,"olfactoryRating":null,"tasteRating":null,"brewTemperatureCelsius":null,"infusionDurationSeconds":null,"statusId":null,"containerId":null,"countryIds":[],"regionIds":[],"aromaIds":[],"aromaticProfileIds":[],"momentIds":[],"badgeIds":[],"stockMilliGrams":${stock ?: "null"},"archivedAt":null}"""
 
     private fun teaPayload(refs: List<String>, teas: List<String>, tastings: List<String> = emptyList(), movements: List<String> = emptyList()) =
         """{"references":[${refs.joinToString(",")}],"teas":[${teas.joinToString(",")}],"tastings":[${tastings.joinToString(",")}],"stockMovements":[${movements.joinToString(",")}] }""".toByteArray()

@@ -26,14 +26,11 @@ class TeaFormDraftTest {
         )
     }
 
-    @Test fun changingOrClearingStockIsDetectedAsAnEdit() {
-        val initial = draft(stockInput = "12,5")
-
-        assertEquals(setOf(TeaEditableField.STOCK), initial.copy(stockInput = "0").changedFieldsSince(initial))
-        assertEquals(setOf(TeaEditableField.STOCK), initial.copy(stockInput = "").changedFieldsSince(initial))
+    @Test fun stockIsNotAnEditableTeaField() {
+        org.junit.Assert.assertFalse(TeaEditableField.entries.any { it.name == "STOCK" })
     }
 
-    private fun draft(temperature: Int? = null, personalNotes: String = "", stockInput: String = "") = TeaFormDraft(
+    private fun draft(temperature: Int? = null, personalNotes: String = "") = TeaFormDraft(
         name = "Thé fictif",
         categoryId = UUID.fromString("10000000-0000-4000-8000-000000000001"),
         statusId = null,
@@ -51,6 +48,5 @@ class TeaFormDraftTest {
         technicalInformation = "",
         brewTemperatureCelsius = temperature,
         infusionDurationInput = "",
-        stockInput = stockInput,
     )
 }

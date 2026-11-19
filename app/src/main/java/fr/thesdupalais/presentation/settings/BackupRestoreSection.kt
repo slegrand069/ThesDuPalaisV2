@@ -135,7 +135,7 @@ internal fun BackupRestoreSection(workflow: BackupReplacementWorkflow) {
                     selected.isEmpty() -> Text("Sélectionnez au moins un ensemble.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
                     loading -> Text("Actualisation des conséquences…", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
                     selection != null -> {
-                        Text("Le ZIP v1 ne sauvegarde pas les photos. Les photos locales liées aux thés conservés restent en place.", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+                        if (session?.schemaVersion == fr.thesdupalais.data.backup.BackupArchiveValidator.LEGACY_SCHEMA_VERSION) Text("Le ZIP v1 ne contient pas de photos. Les photos locales des fiches conservées resteront en place.", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
                         RestoreConsequenceSummary(selection!!.plan, Modifier.padding(top = 8.dp))
                         selection!!.plan.target.warnings.forEach { Text(it, Modifier.padding(top = 6.dp), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall) }
                         val blockers = selection!!.plan.blockers
@@ -163,7 +163,7 @@ internal fun BackupRestoreSection(workflow: BackupReplacementWorkflow) {
                     Text("Les ensembles cochés seront remplacés par ceux de l’archive. Les autres ensembles resteront inchangés.")
                     RestoreConsequenceSummary(confirmedSelection.plan, Modifier.padding(top = 12.dp))
                     confirmedSelection.plan.target.warnings.forEach { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall) }
-                    Text("Le ZIP v1 ne contient pas les photos. Les photos locales des thés conservés restent en place; celles liées à des thés retirés seront mises en quarantaine puis supprimées après vérification.", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+                    if (confirmedSession.schemaVersion == fr.thesdupalais.data.backup.BackupArchiveValidator.LEGACY_SCHEMA_VERSION) Text("Le ZIP v1 ne transporte pas les photos. Les photos locales des fiches conservées restent en place; celles des fiches retirées seront supprimées après vérification.", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
                     Text("Cette action modifie la collection et ne peut pas être annulée depuis l’application.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
                 }
             },

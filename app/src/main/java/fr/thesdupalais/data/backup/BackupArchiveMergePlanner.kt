@@ -333,7 +333,7 @@ object BackupArchiveMergePlanner {
         val digest = MessageDigest.getInstance("SHA-256")
         archive.entries.toSortedMap().forEach { (path, bytes) ->
             digest.update(path.toByteArray(StandardCharsets.UTF_8)); digest.update(0)
-            digest.update(canonicalJson(bytes).toByteArray(StandardCharsets.UTF_8)); digest.update(0)
+            digest.update((if (path.endsWith(".json")) canonicalJson(bytes) else sha256(bytes)).toByteArray(StandardCharsets.UTF_8)); digest.update(0)
         }
         return digest.digest().hex()
     }

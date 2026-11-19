@@ -12,10 +12,11 @@ import org.json.JSONException
 import org.json.JSONObject
 import org.json.JSONTokener
 
-/** Strict, side-effect-free validation for the v1 backup container. It never writes files or Room. */
+/** Strict, side-effect-free validation for versioned backup ZIPs. */
 object BackupArchiveValidator {
     const val FORMAT = "thesdupalais.backup"
-    const val SCHEMA_VERSION = 1
+    const val LEGACY_SCHEMA_VERSION = 1
+    const val SCHEMA_VERSION = 2
     const val MAX_ARCHIVE_BYTES = 50L * 1024 * 1024
     const val MAX_EXPANDED_BYTES = 150L * 1024 * 1024
     const val MAX_IMAGE_BYTES = 10L * 1024 * 1024
@@ -26,6 +27,7 @@ object BackupArchiveValidator {
 
     data class ValidatedArchive(
         val backupId: String,
+        val schemaVersion: Int,
         val createdAt: String,
         val includedSets: Set<String>,
         val entries: Map<String, ByteArray>,
@@ -68,7 +70,8 @@ object BackupArchiveValidator {
         val manifest = parseObject(manifestBytes, "manifest.json")
         strictKeys(manifest, setOf("format", "schemaVersion", "backupId", "createdAt", "producer", "includedSets", "entries"), "manifest.json")
         if (string(manifest, "format", "manifest.json") != FORMAT) fail("manifest.json.format", "Unsupported format.")
-        if (integer(manifest, "schemaVersion", "manifest.json") != SCHEMA_VERSION.toLong()) fail("manifest.json.schemaVersion", "Unsupported schema version.")
+        val schemaVersion = integer(manifest, "schemaVersion", "manifest.json").toInt()
+        if (schemaVersion !in LEGACY_SCHEMA_VERSION..SCHEMA_VERSION) fail("manifest.json.schemaVersion", "Unsupported schema version.")
         val backupId = string(manifest, "backupId", "manifest.json")
         if (!Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$").matches(backupId)) fail("manifest.json.backupId", "Canonical UUID required.")
         val createdAt = string(manifest, "createdAt", "manifest.json")
@@ -109,14 +112,18 @@ object BackupArchiveValidator {
             if (bytes.size.toLong() != d.size) fail(d.path, "Declared size does not match.")
             val actualDigest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(Locale.ROOT, it) }
             if (actualDigest != d.sha256) fail(d.path, "SHA-256 mismatch.")
-            if (d.path.startsWith("articles/media/")) {
+            if (d.path.startsWith("photos/")) {
+                if (schemaVersion < SCHEMA_VERSION || "teas" !in included) fail(d.path, "Tea photos require backup v2 and the teas set.")
+                if (d.mediaType != "image/jpeg") fail(d.path, "Tea photos must be JPEG images.")
+                validateImage(d.path, d.mediaType, bytes)
+            } else if (d.path.startsWith("articles/media/")) {
                 if ("articles" !in included) fail(d.path, "Article media included without the articles set.")
                 validateImage(d.path, d.mediaType, bytes)
             } else if (d.path.endsWith(".json")) {
                 if (d.mediaType != "application/json") fail(d.path, "Expected application/json media type.")
                 val json = parseObject(bytes, d.path)
                 when (d.path) {
-                    "data/teas.json" -> validateTeasShape(json)
+                    "data/teas.json" -> validateTeasShape(json, schemaVersion >= SCHEMA_VERSION)
                     "data/configuration.json" -> validateConfigurationShape(json)
                 }
             } else if (d.path.endsWith(".md")) {
@@ -130,8 +137,10 @@ object BackupArchiveValidator {
         if (teasPayload != null) validateWithCollectionRules(teasPayload, "teas")
         if (configPayload != null) validateWithCollectionRules(configPayload, "configuration")
         if (teasPayload != null && configPayload != null) validateReferenceSetCollisions(teasPayload, configPayload)
+        if (teasPayload != null && schemaVersion >= SCHEMA_VERSION) validateTeaPhotos(teasPayload, files)
         if ("articles" in included) validateArticles(parseObject(files.getValue("articles/index.json"), "articles/index.json"), files)
-        return ValidatedArchive(backupId, createdAt, included.toSet(), files.filterKeys { it != "manifest.json" })
+        if (schemaVersion < SCHEMA_VERSION && files.keys.any { it.startsWith("photos/") }) fail("ZIP", "Legacy v1 archive cannot contain tea photo files.")
+        return ValidatedArchive(backupId, schemaVersion, createdAt, included.toSet(), files.filterKeys { it != "manifest.json" })
     }
 
     /** Adapts the v1 backup subset to the established collection parser, reusing its business rules. */
@@ -279,8 +288,9 @@ object BackupArchiveValidator {
         if (articleFiles != referenced) fail("articles/index.json", "Article files do not exactly match indexed Markdown and illustrations.")
     }
 
-    private fun validateTeasShape(root: JSONObject) {
-        strictKeys(root, setOf("references", "teas", "tastings", "stockMovements"), "data/teas.json")
+    private fun validateTeasShape(root: JSONObject, allowPhotos: Boolean) {
+        if (allowPhotos && !root.has("photos")) fail("data/teas.json.photos", "Version 2 requires a photo metadata array, empty when no photos are present.")
+        strictKeys(root, if (allowPhotos) setOf("references", "teas", "tastings", "stockMovements", "photos") else setOf("references", "teas", "tastings", "stockMovements"), "data/teas.json")
         array(root, "references", "data/teas.json").forEachIndexed { i, raw ->
             val p = "data/teas.json.references[$i]"; val r = raw as? JSONObject ?: fail(p, "Object required.")
             strictKeys(r, setOf("id", "kind", "semanticKey", "label", "parentCountryId", "archivedAt", "displayPriority"), p)
@@ -309,6 +319,43 @@ object BackupArchiveValidator {
             listOf("id","teaId","kind","occurredAt","recordedAt").forEach { string(m,it,p) }
             nullableInteger(m,"deltaMilliGrams",p); integer(m,"stockAfterMilliGrams",p); nullableString(m,"tastingId",p); nullableString(m,"note",p)
         }
+    }
+
+    private fun validateTeaPhotos(root: JSONObject, files: Map<String, ByteArray>) {
+        val teas = array(root, "teas", "data/teas.json").map { (it as JSONObject).getString("id") }.toSet()
+        val photos = if (root.has("photos")) array(root, "photos", "data/teas.json") else emptyList()
+        val ids = mutableSetOf<String>()
+        val paths = mutableSetOf<String>()
+        val byTea = mutableMapOf<String, MutableList<Int>>()
+        photos.forEachIndexed { index, raw ->
+            val path = "data/teas.json.photos[$index]"
+            val row = raw as? JSONObject ?: fail(path, "Object required.")
+            strictKeys(row, setOf("id", "teaId", "path", "position", "isPrimary"), path)
+            val id = string(row, "id", path).also { requirePhotoUuid(it, "$path.id") }
+            val teaId = string(row, "teaId", path).also { requirePhotoUuid(it, "$path.teaId") }
+            if (teaId !in teas) fail("$path.teaId", "Photo points to a tea absent from this archive.")
+            val imagePath = string(row, "path", path)
+            validatePath(imagePath, "$path.path")
+            if (imagePath != "photos/$id.jpg") fail("$path.path", "Photo path must be photos/<photo-id>.jpg.")
+            if (!ids.add(id) || !paths.add(imagePath)) fail(path, "Duplicate photo id or path.")
+            val position = integer(row, "position", path).toInt()
+            if (position !in 0..2) fail("$path.position", "Photo position must be from zero to two.")
+            if (row.opt("isPrimary") !is Boolean) fail("$path.isPrimary", "Boolean required.")
+            byTea.getOrPut(teaId) { mutableListOf() } += position
+        }
+        byTea.forEach { (teaId, positions) ->
+            if (positions.size > 3 || positions.distinct().size != positions.size || positions.sorted() != positions.indices.toList()) {
+                fail("data/teas.json.photos", "Photo count or order is invalid for tea $teaId.")
+            }
+            val mainCount = photos.filterIsInstance<JSONObject>().count { it.getString("teaId") == teaId && it.getBoolean("isPrimary") }
+            if (mainCount != 1) fail("data/teas.json.photos", "Each tea with photos must have exactly one primary photo.")
+        }
+        val actualImages = files.keys.filter { it.startsWith("photos/") }.toSet()
+        if (actualImages != paths) fail("data/teas.json.photos", "Photo files and JSON references differ.")
+    }
+
+    private fun requirePhotoUuid(value: String, path: String) {
+        if (runCatching { java.util.UUID.fromString(value).toString() == value }.getOrDefault(false).not()) fail(path, "Canonical UUID required.")
     }
 
     private fun validateConfigurationShape(root: JSONObject) {

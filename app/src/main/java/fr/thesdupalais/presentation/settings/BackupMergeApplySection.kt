@@ -107,7 +107,7 @@ internal fun BackupMergeApplySection(workflow: BackupMergeWorkflow) {
             resultMessage?.let { Text(it, Modifier.padding(top = 8.dp).testTag("backup-merge-result"), color = MaterialTheme.colorScheme.primary) }
             session?.let { loaded ->
                 Text("Sauvegarde du ${loaded.createdAt}", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall)
-                Text("Les photos des thés ne sont pas transportées par le ZIP v1 ; les photos locales sont conservées.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                if (loaded.schemaVersion == fr.thesdupalais.data.backup.BackupArchiveValidator.LEGACY_SCHEMA_VERSION) Text("Ce ZIP v1 ne transporte pas de photos ; les photos locales des fiches conservées le restent.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 Text("Ensembles disponibles", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
                 listOf("teas", "configuration").filter { it in loaded.includedSets }.forEach { set ->
                     Row(
@@ -176,7 +176,7 @@ internal fun BackupMergeApplySection(workflow: BackupMergeWorkflow) {
                     Text("Les décisions ci-dessous seront appliquées. Les autres valeurs proposées et les éléments locaux absents seront conservés.")
                     ConfirmationChanges(current, requireNotNull(session).labels)
                     current.target.warnings.forEach { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.tertiary) }
-                    Text("Le ZIP v1 ne contient pas les photos des thés.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                    if (session?.schemaVersion == fr.thesdupalais.data.backup.BackupArchiveValidator.LEGACY_SCHEMA_VERSION) Text("Le ZIP v1 ne contient pas les photos des thés.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {

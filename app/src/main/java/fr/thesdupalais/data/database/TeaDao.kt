@@ -206,6 +206,8 @@ data class TeaWithCatalogData(
     val badges: List<ReferenceEntity>,
     @Relation(parentColumn = "id", entityColumn = "teaId")
     val tastings: List<TastingEntity> = emptyList(),
+    @Relation(parentColumn = "id", entityColumn = "teaId")
+    val photos: List<TeaPhotoEntity> = emptyList(),
 )
 
 data class TeaWithDetailData(
@@ -252,6 +254,8 @@ data class TeaWithDetailData(
         associateBy = Junction(value = TeaBadgeEntity::class, parentColumn = "teaId", entityColumn = "badgeRefId"),
     )
     val badges: List<ReferenceEntity>,
+    @Relation(parentColumn = "id", entityColumn = "teaId")
+    val photos: List<TeaPhotoEntity> = emptyList(),
 )
 
 @Dao
@@ -313,6 +317,15 @@ interface TeaPhotoDao {
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(photo: TeaPhotoEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertAll(photos: List<TeaPhotoEntity>)
+
+    @Query("DELETE FROM tea_photos WHERE teaId = :teaId")
+    suspend fun deleteForTea(teaId: UUID)
+
+    @Query("DELETE FROM tea_photos")
+    suspend fun deleteAll()
 
     @Query("DELETE FROM tea_photos WHERE id = :id")
     suspend fun delete(id: UUID)

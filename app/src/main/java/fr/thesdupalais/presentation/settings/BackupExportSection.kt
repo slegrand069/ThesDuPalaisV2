@@ -56,6 +56,7 @@ internal fun BackupExportSection(exporter: BackupArchiveExporter) {
             Text("Sauvegarder", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text("Créez une archive ZIP vérifiée des données choisies.", style = MaterialTheme.typography.bodyMedium)
+            Text("Avec l’ensemble Thés, le ZIP v2 inclut aussi les photos des fiches.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ExportChoice("Thés et données associées", teas, { teas = it }, "backup-set-teas")
             ExportChoice("Configuration et référentiels", configuration, { configuration = it }, "backup-set-configuration")
             ExportChoice("Articles", false, {}, "backup-set-articles", enabled = false, supporting = "Disponible lorsque le modèle d’articles sera implémenté.")

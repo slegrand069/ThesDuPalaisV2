@@ -25,7 +25,7 @@ import androidx.room.TypeConverters
         SemanticRelationEntity::class,
         SemanticAssociationEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)

@@ -1,6 +1,7 @@
 package fr.thesdupalais.presentation.detail
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -54,6 +55,9 @@ import fr.thesdupalais.domain.quantity.parseOptionalGramsMilliGrams
 import fr.thesdupalais.domain.quantity.totalConsumedMilliGrams
 import java.util.UUID
 import kotlinx.coroutines.launch
+import fr.thesdupalais.presentation.photos.TeaPhotoImage
+import fr.thesdupalais.presentation.photos.PhotoStrip
+import fr.thesdupalais.presentation.photos.PhotoViewer
 
 @Composable
 fun TeaDetailScreen(viewModel: TeaDetailViewModel, onBack: () -> Unit, onEdit: (UUID) -> Unit = {}) {
@@ -190,11 +194,15 @@ private fun TeaDetailBody(
     var showArchiveDialog by remember(tea.id) { mutableStateOf(false) }
     var archivingTea by remember(tea.id) { mutableStateOf(false) }
     var archiveError by remember(tea.id) { mutableStateOf<String?>(null) }
+    var viewerIndex by remember(tea.id) { mutableStateOf<Int?>(null) }
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        TeaHeroPlaceholder(tea.category)
+        val mainPhoto = tea.photos.firstOrNull { it.isPrimary }
+        if (mainPhoto != null) {
+            TeaPhotoImage(mainPhoto.relativePath, Modifier.fillMaxWidth().height(190.dp).clickable { viewerIndex = tea.photos.indexOf(mainPhoto) })
+        } else TeaHeroPlaceholder(tea.category)
         DetailCard(Modifier.testTag("tea-detail-identity")) {
             SectionLabel("IDENTITÉ")
             Text(tea.name, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
@@ -291,6 +299,13 @@ private fun TeaDetailBody(
             }
         }
 
+        if (tea.photos.isNotEmpty()) {
+            DetailCard(Modifier.testTag("tea-detail-photo-gallery")) {
+                SectionLabel("PHOTOS")
+                PhotoStrip(tea.photos.map { it.relativePath }) { viewerIndex = it }
+            }
+        }
+
         DetailCard(Modifier.testTag("tea-detail-tastings")) {
             SectionLabel("DÉGUSTATIONS")
             if (state.tastings.isEmpty()) {
@@ -341,6 +356,7 @@ private fun TeaDetailBody(
             ) { Text("Retirer de la collection active") }
         }
     }
+    viewerIndex?.let { PhotoViewer(tea.photos.map { it.relativePath }, it) { viewerIndex = null } }
     if (showArchiveDialog) AlertDialog(
         onDismissRequest = { if (!archivingTea) showArchiveDialog = false },
         title = { Text("Archiver ce thé ?") },
